@@ -129,6 +129,11 @@ def _validate_cli_callback(callback: str) -> None:
         )
 
 
+def _validate_webapp_callback(url: str) -> bool:
+    """Callback must start with the configured WEBAPP_ORIGIN."""
+    return url.startswith(_WEBAPP_ORIGIN + "/") or url == _WEBAPP_ORIGIN
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -270,6 +275,9 @@ async def webapp_auth_send_link(body: WebappSendLinkRequest):
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Invalid email")
 
+    if not _validate_webapp_callback(body.callback_url):
+        raise HTTPException(status_code=400, detail="Invalid callback URL")
+
     token = create_magic_link_token()
     db.create_magic_link_token(token, email, body.callback_url, "", ttl=600)
 
@@ -288,6 +296,9 @@ async def webapp_auth_verify(token: str = ""):
 
     email = row["email"]
     callback_url = row["callback"]
+
+    if not _validate_webapp_callback(callback_url):
+        raise HTTPException(status_code=400, detail="Invalid callback URL")
 
     user = db.get_user_by_email(email)
     if user is None:

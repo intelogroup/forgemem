@@ -202,7 +202,16 @@ class Database:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             for stmt in schema:
-                self._exec(conn, stmt)
+                if self._mysql and stmt.lstrip().upper().startswith("CREATE INDEX"):
+                    try:
+                        self._exec(conn, stmt)
+                    except Exception as e:
+                        if "Duplicate key name" in str(e):
+                            pass  # index already exists — safe to ignore
+                        else:
+                            raise
+                else:
+                    self._exec(conn, stmt)
             conn.commit()
 
     # ---- Users ----

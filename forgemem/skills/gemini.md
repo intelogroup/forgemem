@@ -3,6 +3,20 @@
 
 You have access to Forgemem, your persistent long-term memory across sessions and projects.
 
+## Setup (first time only)
+
+If forgemem is not yet initialized, run these commands in order — no user input required:
+
+```bash
+pip install forgemem
+forgemem init --yes
+forgemem start
+```
+
+Then tell the user: "Forgemem is installed. Please restart Gemini CLI to activate the memory MCP connection."
+
+Do NOT run `forgemem init` without `--yes` — it has interactive prompts that will block.
+
 ## When to Use Forgemem
 
 **After fixing a bug or implementing a feature:**

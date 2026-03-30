@@ -169,13 +169,16 @@ forgemem init -> "Choose your provider"
   "gemini"      -> BYOK, NO auth, no cloud, FREE
                    (these users may convert to forgemem later)
 
-  "forgemem"    -> OAuth login, cloud inference, PAID  <-- REVENUE
+  "forgemem"    -> Auth login (magic link today, OAuth planned),
+                   cloud inference, PAID                   <-- REVENUE
                    (this is the ONLY path that requires auth)
 ```
 
+**Note:** This describes the _target_ architecture. OAuth (GitHub/Google) is not yet implemented — see the "Auth Gap" section above for current state. Today, auth uses magic link email only.
+
 **Key rules:**
 - **Ollama/BYOK users are never authed.** No account, no cloud, no sync. Everything stays in `~/.forgemem/forgemem_memory.db`. They are free users who may convert later.
-- **Auth only happens when user picks "forgemem" as provider.** That's the moment they create an account (OAuth), get a JWT, and start using paid cloud inference for mining and distillation.
+- **Auth only happens when user picks "forgemem" as provider.** That's the moment they create an account (OAuth, planned; currently magic-link only), get a JWT, and start using paid cloud inference for mining and distillation.
 - **SQLite DB stays local by default.** Cloud sync is an explicit opt-in (`forgemem sync`), only available to authed "forgemem" provider users. Solo devs with one computer never need it.
 - **Ollama makes zero revenue** but drives adoption. The funnel: Ollama (free) -> hits quality ceiling -> switches to "forgemem" provider (paid).
 
@@ -194,7 +197,7 @@ User picks "forgemem" provider        Oracle Cloud (ForgeMem Server)
 ───────────                   ─────────────────────────────
 forgemem init
   -> picks "forgemem"
-  -> GitHub/Google OAuth -----------> creates account, issues JWT
+  -> Auth (magic link today, OAuth planned) -> creates account, issues JWT
   -> JWT saved to config.json
 
 daily_scan.py runs (lid open)
@@ -503,7 +506,7 @@ The four items above form a **connected stack** that, built together, would crea
 ```
 
 **Priority recommendation:**
-1. **OAuth first** — it's the blocker. Users won't sign up for managed service with email-only magic link. Add GitHub + Google OAuth to the Next.js webapp.
+1. **OAuth first** — it's the biggest UX friction point. Developer users expect social login; magic-link-only auth (which works today via `server/main.py:271-314`) limits conversion. Add GitHub + Google OAuth to the Next.js webapp.
 2. **Cross-device sync** — already built, but useless without frictionless auth. Once OAuth ships, promote sync as a killer feature.
 3. **Cloud-scheduled inference** — with auth + sync in place, this becomes the paid tier differentiator.
 4. **White-label model** — longer-term proprietary moat. Ship after the cloud layer is generating revenue. (Note: this is emphasized in external communications because it's the most technically novel initiative and best illustrates long-term differentiation, even though OAuth/sync are tactical prerequisites that ship first.)

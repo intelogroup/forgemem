@@ -74,6 +74,28 @@ The Claude Code blog itself calls uncurated MEMORY.md a **"context liability"** 
 
 **Revised threat assessment:** Claude Code's MEMORY.md is a weaker implementation than originally feared. The real threat is if Anthropic adds semantic search + cross-project querying to MEMORY.md. Monitor Claude Code changelogs for this. As long as MEMORY.md stays as flat files, ForgeMem has a clear upgrade path.
 
+### Broader Competitive Landscape: Agent Memory Systems (2025-2026)
+
+ForgeMem isn't just competing with platform-native memory (MEMORY.md). There's a growing ecosystem of agent memory tools. Here's how ForgeMem compares:
+
+| System | Architecture | Key Differentiator | LoCoMo Score | vs ForgeMem |
+|--------|-------------|-------------------|-------------|-------------|
+| **Letta (MemGPT)** | Agent self-edits memory via tool calls. 3-tier: core/recall/archival | Agent-controlled curation, OS-inspired | ~83.2% | Conversational memory, not dev-history-aware |
+| **Mem0** | Passive extraction pipeline, framework-agnostic | 91% lower latency, 90%+ token savings | ~68.5% | General-purpose memory, no git mining |
+| **Zep** | Episodic + temporal memory | Structures interactions into sequences | N/A | Session-focused, no cross-agent |
+| **LangMem** | JSON docs in LangGraph store | Tight LangGraph integration | N/A | Framework-locked (LangGraph only) |
+| **SuperLocalMemory** | Local-first, mode-based | Privacy-first variants | ~87.7% | Research project, not production tool |
+
+**Source:** [Letta benchmarks](https://www.letta.com/blog/benchmarking-ai-agent-memory) | [Mem0 paper (arXiv 2504.19413)](https://arxiv.org/abs/2504.19413) | [5 Memory Systems Compared (DEV)](https://dev.to/varun_pratapbhardwaj_b13/5-ai-agent-memory-systems-compared-mem0-zep-letta-supermemory-superlocalmemory-2026-benchmark-59p3)
+
+**Key finding from Letta benchmarks:** A simple filesystem-based agent (no fancy memory) achieved 74.0% on LoCoMo with GPT-4o mini, beating Mem0's best graph variant (68.5%). Implication: sophisticated memory infrastructure isn't always better than simple persistence with good retrieval.
+
+**Where ForgeMem is genuinely different:** All competitors above focus on **conversational memory** (what was said in chat). ForgeMem focuses on **operational memory** (what was tried, what failed, what worked in code). This is a distinct category. None of the competitors mine git history, distill from commit diffs, or rank learnings by impact score.
+
+**The risk:** Letta and Mem0 both ship MCP servers now. They compete for the same MCP tool slot in an agent's config. If a user installs Mem0's MCP server, they may not feel the need for ForgeMem's. ForgeMem needs to clearly own the "developer operational memory" niche — not try to be general-purpose conversational memory.
+
+**Positioning recommendation:** "Mem0/Letta remember what you said. ForgeMem remembers what you built."
+
 ---
 
 ## To Build a Real Moat
@@ -616,7 +638,15 @@ def retrieve_memories(query: str, k: int = 5, project: str | None = None, type: 
     """
 ```
 
-**Why it matters:** Anthropic's tool use documentation explicitly recommends detailed descriptions with examples. Agents perform significantly better when tool descriptions include "when to use" guidance and concrete examples. This is the single highest-ROI change for agent UX.
+**Why it matters:** Anthropic's engineering blog ([Writing effective tools for AI agents](https://www.anthropic.com/engineering/writing-tools-for-agents)) states explicitly: **"Tool descriptions are prompts. Every word in your tool's name, description, and parameter documentation shapes how agents understand and use it."** They achieved state-of-the-art SWE-bench performance not by changing the model, but by refining tool descriptions. This is the single highest-ROI change for agent UX.
+
+**Official Anthropic anti-patterns to avoid:**
+- **Fragmenting operations into too many tools.** Instead of separate `search_traces`, `search_principles`, `filter_by_project`, `filter_by_type` — keep the consolidated `retrieve_memories` with filter parameters. (ForgeMem already does this correctly.)
+- **Thin API wrappers.** Don't just wrap every DB query. Focus on high-impact workflows that match how agents think about tasks.
+- **Returning opaque IDs.** Return human-readable context (principle text, project name) — not just row IDs that force another tool call. (ForgeMem does this correctly.)
+- **Bloated responses.** Keep tool responses under 25,000 tokens. Add a `response_format` parameter with "concise" vs "detailed" options.
+
+**Source:** [Anthropic: Building effective agents](https://www.anthropic.com/research/building-effective-agents) | [Claude API: Implement tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use)
 
 #### 3. Add a `forgemem doctor` Command (Self-Diagnosis)
 
@@ -831,6 +861,18 @@ forgemem watch --json
 - Enables multi-agent workflows (agent A mines, agent B acts on new principles)
 - CI/CD integration (trigger actions on high-impact learnings)
 - Real-time dashboards in the webapp
+
+---
+
+### Agent-Friendly HTTP API Improvements
+
+The HTTP API (`forgemem/api.py`, `server/main.py`) is already functional but needs these changes to be truly agent-consumable. Based on [The New Stack: Prepare Your API for AI Agents](https://thenewstack.io/how-to-prepare-your-api-for-ai-agents/) and Google's [Developer's Guide to AI Agent Protocols](https://developers.googleblog.com/developers-guide-to-ai-agent-protocols/):
+
+1. **Consistent error responses.** Every error should return `{"error": "...", "hint": "...", "code": "..."}`. The `hint` field tells agents how to self-correct (e.g., `"hint": "Parameter 'q' is required. Pass a search query."`)
+2. **Pagination on all list endpoints.** `/search`, `/v1/sync/pull` must support `limit` + `cursor` params. Agents retry and paginate — unbounded responses break workflows.
+3. **Idempotent writes.** Agents retry. `POST /traces` should accept an optional `idempotency_key` to prevent duplicate saves on retry.
+4. **Introspection endpoint.** Add `GET /capabilities` returning available endpoints and their parameters. Agents can discover what the API offers without hardcoded knowledge.
+5. **Rate limit headers.** Return `X-RateLimit-Remaining` and `Retry-After` on every response so agents can self-throttle.
 
 ---
 

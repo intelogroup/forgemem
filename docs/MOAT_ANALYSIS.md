@@ -141,12 +141,12 @@ The team wants to **white-label a cheap/small model** (e.g., a fine-tuned Llama,
 **Open questions:**
 - **Which base model?** Needs to be small enough for local inference but good enough for principle extraction. Updated candidates (March 2026):
 
-  | Model | Params | HumanEval | Context | Quantized RAM | License |
-  |-------|--------|-----------|---------|---------------|---------|
-  | **Qwen3.5-9B** | 9B | Strong (MMLU-Pro 82.5) | 128K | ~6GB (Q4) | Apache-2.0 |
-  | **Gemma 3 4B IT** | 4B | 71.3% | 128K | ~3GB (Q4) | Open |
-  | **Phi-4-mini-instruct** | 3.8B | Good (GSM8K 88.6%) | 16K | ~2.5GB (Q4) | MIT |
-  | **SmolLM3-3B** | 3B | Competitive | 8K | ~2GB (Q4) | Apache-2.0 |
+  | Model | Params | Benchmark Signal | Context | Quantized RAM | License |
+  |-------|--------|-----------------|---------|---------------|---------|
+  | **Qwen3.5-9B** | 9B | MMLU-Pro 82.5 | 128K | ~6GB (Q4) | Apache-2.0 |
+  | **Gemma 3 4B IT** | 4B | HumanEval 71.3% | 128K | ~3GB (Q4) | Open |
+  | **Phi-4-mini-instruct** | 3.8B | GSM8K 88.6% | 16K | ~2.5GB (Q4) | MIT |
+  | **SmolLM3-3B** | 3B | Competitive (multi-benchmark) | 8K | ~2GB (Q4) | Apache-2.0 |
 
   Recommendation: Start with **Gemma 3 4B IT** or **Phi-4-mini-instruct** — best balance of size, coding ability, and permissive licensing for fine-tuning. Qwen3.5-9B is strongest but may be too large for low-end machines.
 - **Fine-tuning data:** Where does training data come from? Could use anonymized traces from managed service users (with consent) or synthetic data from larger models.
@@ -998,16 +998,42 @@ Agent query: "database too many open handles"
            Final results (best of both)
 ```
 
-**Reciprocal Rank Fusion (RRF)** is the standard merging algorithm:
-```python
-def rrf_score(rank_keyword, rank_vector, k=60):
-    score = 0
-    if rank_keyword is not None:
-        score += 1.0 / (k + rank_keyword)
-    if rank_vector is not None:
-        score += 1.0 / (k + rank_vector)
-    return score
+**Reciprocal Rank Fusion (RRF)** is the standard merging algorithm. Alex Garcia published a [pure-SQL implementation](https://alexgarcia.xyz/blog/2024/sqlite-vec-hybrid-search/index.html) that runs the entire hybrid search in one query:
+
+```sql
+-- Pure SQL hybrid search: FTS5 + sqlite-vec + RRF in one query
+WITH vec_matches AS (
+  SELECT rowid, row_number() OVER () as rank_number
+  FROM principles_vec
+  WHERE embedding MATCH :query_embedding
+  ORDER BY distance
+  LIMIT :k
+),
+fts_matches AS (
+  SELECT rowid, row_number() OVER (ORDER BY rank) as rank_number
+  FROM principles_fts
+  WHERE principles_fts MATCH :query_text
+  LIMIT :k
+),
+final AS (
+  SELECT
+    coalesce(fts.rowid, vec.rowid) as rowid,
+    coalesce(1.0 / (60 + fts.rank_number), 0.0) +
+    coalesce(1.0 / (60 + vec.rank_number), 0.0)
+    AS combined_score
+  FROM fts_matches fts
+  FULL OUTER JOIN vec_matches vec ON fts.rowid = vec.rowid
+  ORDER BY combined_score DESC
+)
+SELECT final.rowid, final.combined_score, p.*
+FROM final
+JOIN principles p ON p.id = final.rowid
+LIMIT :limit;
 ```
+
+**Real-world performance:** [ZeroClaw benchmarked this on a Raspberry Pi Zero 2 W](https://zeroclaws.io/blog/zeroclaw-hybrid-memory-sqlite-vector-fts5/) — under 3ms total (0.3ms FTS5, 2ms vector, 0.1ms merge). On a modern laptop it'll be sub-millisecond.
+
+**Source:** [sqlite-vec hybrid search blog](https://alexgarcia.xyz/blog/2024/sqlite-vec-hybrid-search/index.html) | [Simon Willison on hybrid search](https://simonwillison.net/2024/Oct/4/hybrid-full-text-search-and-vector-search-with-sqlite/) | [liamca/sqlite-hybrid-search](https://github.com/liamca/sqlite-hybrid-search)
 
 ### Local vs Cloud: Same Split as Inference
 
@@ -1116,7 +1142,20 @@ Self-hosted on Oracle Cloud — same vLLM/TGI instance can serve both inference 
 - Standardize on 384 (smallest, fastest, good enough for <100K docs)
 - Or use Matryoshka embeddings (OpenAI's text-embedding-3-small supports truncating to any dimension)
 
-**Recommendation:** Standardize on **384 dimensions** using `all-MiniLM-L6-v2` (local) or `text-embedding-3-small` truncated to 384 (cloud). This keeps the vector table small and KNN fast.
+**Best local embedding models (March 2026 benchmarks):**
+
+| Model | Params | Dims | Context | MTEB Score | RAM | License |
+|-------|--------|------|---------|------------|-----|---------|
+| **nomic-embed-text v1.5** | 137M | 64-768 (Matryoshka) | 8,192 tok | ~62 | ~500MB | Apache-2.0 |
+| **EmbeddingGemma** (Google) | 308M | 128-768 (Matryoshka) | — | Top <500M | <200MB | Open |
+| **Qwen3-Embedding-0.6B** | 600M | 32-1024 (Matryoshka) | — | Very high | ~1GB | Apache-2.0 |
+| **all-MiniLM-L6-v2** | 22M | 384 (fixed) | 512 tok | 56.3 | ~90MB | Apache-2.0 |
+
+**Matryoshka embeddings** (nomic-embed, EmbeddingGemma, Qwen3) let you truncate to any dimension (384, 256, 128) with graceful quality degradation. This means you can start at 384 dims for speed and upgrade to 768 later without re-embedding.
+
+**Recommendation:** Use **nomic-embed-text v1.5** as default (best quality/size, 8K context, Matryoshka, Apache-2.0). Store at **384 dimensions** (truncated from 768) to keep vector tables small. Upgrade to 768 later if retrieval quality needs it.
+
+**Source:** [Best open-source embedding models 2026](https://www.bentoml.com/blog/a-guide-to-open-source-embedding-models) | [Nomic Embed Matryoshka](https://www.nomic.ai/news/nomic-embed-matryoshka) | [Ollama embedding models](https://ollama.com/blog/embedding-models)
 
 #### Phase 3: Embed on Write, Search on Read
 
@@ -1187,16 +1226,19 @@ Vector table size: 1.2 MB
 
 ### Cost Analysis
 
-| Provider | Model | Dims | Cost per 1K embeddings | ForgeMem scale (1K principles) |
-|----------|-------|------|----------------------|-------------------------------|
-| **Ollama (local)** | nomic-embed-text | 768 | Free | Free |
-| **Ollama (local)** | all-minilm | 384 | Free | Free |
-| **OpenAI** | text-embedding-3-small | 1536 | $0.02 | $0.02 |
-| **Voyage AI** | voyage-3-lite | 512 | $0.02 | $0.02 |
-| **Gemini** | embedding-001 | 768 | Free (< 1500 req/min) | Free |
-| **ForgeMem cloud** | self-hosted | 384 | Included in credits | ~$0.01 |
+| Provider | Model | Dims | Cost per 1M tokens | Notes |
+|----------|-------|------|-------------------|-------|
+| **Ollama (local)** | nomic-embed-text v1.5 | 384-768 | Free | Best local option, 274MB |
+| **Ollama (local)** | all-minilm | 384 | Free | Smallest, 46MB |
+| **Mistral** | Mistral Embed | — | $0.01 | Cheapest commercial |
+| **OpenAI** | text-embedding-3-small | 1536 | $0.02 ($0.01 batch) | Best value cloud |
+| **Voyage AI** | voyage-3.5-lite | — | $0.02 | 200M tokens free tier |
+| **Gemini** | gemini-embedding-001 | 3072 | $0.15 ($0.075 batch) | Free tier available |
+| **ForgeMem cloud** | self-hosted nomic | 384 | Included in credits | Fixed infra cost |
 
-At ForgeMem's scale (most users have <1K principles, <10K traces), embedding costs are negligible. The main cost is the one-time backfill.
+At ForgeMem's scale (most users have <1K principles, <10K traces), embedding costs are negligible — under $0.01 for a full backfill via API. Voyage AI's 200M free-tier tokens covers ~400K principles at zero cost.
+
+**Source:** [OpenAI pricing](https://platform.openai.com/docs/pricing) | [Voyage AI pricing](https://docs.voyageai.com/docs/pricing) | [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)
 
 ### Cloud Vector Search (for Sync Users)
 
@@ -1211,19 +1253,18 @@ For users who opt into cloud sync + forgemem provider:
 │                                                        │
 │ ──── forgemem sync ──────────────────────────────────  │
 │                                                        │
-│ CLOUD (Oracle MySQL)                                   │
-│   MySQL + pgvector-compatible extension                │
-│   OR: separate vector index (hnswlib serialized)       │
+│ CLOUD (Oracle MySQL HeatWave)                          │
+│   MySQL VECTOR data type + DISTANCE() function         │
+│   Automatic HNSW index for ANN search                  │
+│   OR: HeatWave Vector Index for large-scale            │
 │   Server-side hybrid search for /v1/search endpoint    │
-│   Embeddings generated server-side (vLLM or sentence-  │
-│   transformers on same Oracle Cloud instance)          │
+│   Embeddings via ML_EMBED_ROW() or sentence-transformers│
 └───────────────────────────────────────────────────────┘
 ```
 
 **Cloud options for MySQL vector search:**
-- **Oracle MySQL HeatWave** has native vector store support (2024+)
-- **Serialize hnswlib index** — generate embeddings server-side, store in a binary column, load hnswlib index into memory for search
-- **Add a lightweight Qdrant instance** on Oracle Cloud if MySQL vector support is insufficient
+- **Oracle MySQL HeatWave (native)** — `VECTOR` data type, `DISTANCE()` function for cosine/L2 similarity, automatic HNSW index creation (MySQL 9.5+), `ML_EMBED_ROW()` / `ML_EMBED_TABLE()` for server-side embedding generation, HeatWave Vector Index for large-scale ANN search. This is the recommended path — no external extensions needed. ([MySQL HeatWave Vector Store docs](https://dev.mysql.com/doc/heatwave/en/mys-hw-genai-vector-search.html))
+- **Fallback: serialize hnswlib index** — if HeatWave features are unavailable on your OCI tier, generate embeddings server-side, store in a BLOB column, load hnswlib index into memory for search
 
 **Recommendation:** Start with local-only sqlite-vec. Add cloud vector search only when the sync user base justifies it. The local experience should be excellent first.
 
@@ -1263,7 +1304,7 @@ No breaking changes at any phase. Users who never configure embeddings keep usin
 ```
 
 Set during `forgemem init` with a new question:
-```
+```text
 Enable semantic search? (recommended, requires embedding model)
 > Yes — use Ollama (nomic-embed-text, free, 274MB download)
   Yes — use my API provider (uses your configured API key)

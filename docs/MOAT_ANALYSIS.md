@@ -17,7 +17,7 @@ ForgeMem is a persistent long-term memory system for AI coding agents. It mines 
 
 | Factor | Strength | Why |
 |--------|----------|-----|
-| **Data network effect** | Moderate | The more a user/team accumulates traces and principles, the more valuable the tool becomes. Switching means abandoning that curated knowledge base. But it's SQLite — trivially exportable. |
+| **Data network effect** | Weak | The more a user/team accumulates traces and principles, the more valuable the tool becomes. However, it's SQLite — trivially exportable — so switching cost is minimal. |
 | **Multi-agent integration** | Moderate | Supports Claude Code, Copilot, Gemini, Codex from one DB. Being the shared layer across agents is a good wedge — no single vendor will build this cross-platform. |
 | **First-mover in "agent memory"** | Weak | Category is new but the idea is obvious. Every agent platform will eventually ship native memory. |
 | **Zero-friction onboarding** | Weak | `pip install forgemem && forgemem init` is slick, but easily replicable. |
@@ -85,12 +85,21 @@ The team wants to **white-label a cheap/small model** (e.g., a fine-tuned Llama,
 
 **Why this matters for moat:**
 - **Removes the biggest adoption friction** — no API key needed for core functionality
-- Creates a **proprietary distillation layer** (fine-tuned on coding patterns) that competitors can't trivially replicate
+- Creates a **differentiated distillation layer** (fine-tuned on coding patterns) that competitors can't trivially replicate. Note: the fine-tuned model weights would be closed-source even though the ForgeMem CLI remains Apache-2.0 — this is a **dual-licensing strategy** (open-source tool, proprietary model). This mirrors how Ollama (open CLI) distributes closed-weight models. The moat comes from the training data and fine-tuning, not the code.
 - Enables **offline-first auto-scheduling** — the daemon mines + distills without any network calls
 - The managed version becomes the premium tier (better model, cloud storage, sync)
 
 **Open questions:**
-- **Which base model?** Needs to be small enough for local inference (~2-4B params) but good enough for principle extraction. Candidates: Phi-3-mini, Llama-3.2-3B, Mistral-7B-quantized, Gemma-2B.
+- **Which base model?** Needs to be small enough for local inference but good enough for principle extraction. Updated candidates (March 2026):
+
+  | Model | Params | HumanEval | Context | Quantized RAM | License |
+  |-------|--------|-----------|---------|---------------|---------|
+  | **Qwen3.5-9B** | 9B | Strong (MMLU-Pro 82.5) | 128K | ~6GB (Q4) | Apache-2.0 |
+  | **Gemma 3 4B IT** | 4B | 71.3% | 128K | ~3GB (Q4) | Open |
+  | **Phi-4-mini-instruct** | 3.8B | Good (GSM8K 88.6%) | 16K | ~2.5GB (Q4) | MIT |
+  | **SmolLM3-3B** | 3B | Competitive | 8K | ~2GB (Q4) | Apache-2.0 |
+
+  Recommendation: Start with **Gemma 3 4B IT** or **Phi-4-mini-instruct** — best balance of size, coding ability, and permissive licensing for fine-tuning. Qwen3.5-9B is strongest but may be too large for low-end machines.
 - **Fine-tuning data:** Where does training data come from? Could use anonymized traces from managed service users (with consent) or synthetic data from larger models.
 - **Distribution:** Ship as GGUF via `forgemem install-model`? Or use Ollama as a dependency? Or embed llama.cpp?
 - **Quality bar:** How good does distillation need to be? If the cheap model extracts mediocre principles, it hurts trust in the whole system.

@@ -18,14 +18,14 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from forgememoo import __version__
+from forgememo import __version__
 
 # ---------------------------------------------------------------------------
 # App + console
 # ---------------------------------------------------------------------------
 
 app = typer.Typer(
-    name="forgememoo",
+    name="forgememo",
     help="Long-term memory store for AI agents.",
     add_completion=False,
 )
@@ -65,7 +65,7 @@ CROSS = "✗" if _UNICODE_OK else "x"
 
 def _version_callback(value: bool) -> None:
     if value:
-        console.print(f"forgememoo {__version__}")
+        console.print(f"forgememo {__version__}")
         raise typer.Exit()
 
 
@@ -129,7 +129,7 @@ def _main(
         ),
     ] = None,
 ) -> None:
-    from forgememoo.core import DB_PATH
+    from forgememo.core import DB_PATH
 
     _SKIP_AUTO_INIT = {"init", "mcp", "help", None}
     if ctx.invoked_subcommand not in _SKIP_AUTO_INIT and not DB_PATH.exists():
@@ -179,7 +179,7 @@ def _register_mcp(settings_path: Path) -> bool:
 
 
 def _generate_skill(agent: str, dry_run: bool = False) -> None:
-    """Read template from forgememoo/skills/{agent}.{ext} and write to SKILL_PATHS[agent]."""
+    """Read template from forgememo/skills/{agent}.{ext} and write to SKILL_PATHS[agent]."""
     ext = "json" if agent == "codex" else "md"
     template = SKILL_TEMPLATES_DIR / f"{agent}.{ext}"
     dest = SKILL_PATHS[agent]
@@ -241,7 +241,7 @@ def _detect_project_from_git() -> Optional[str]:
 
 def _prompt_provider_setup(yes: bool) -> None:
     """If no provider is configured, require interactive provider selection."""
-    from forgememoo import config as fm_cfg
+    from forgememo import config as fm_cfg
 
     if fm_cfg.load().get("provider") is not None:
         return  # already configured (e.g. Ollama was just set above)
@@ -339,7 +339,7 @@ def init(
         raise typer.Exit(1)
 
     # DB init
-    from forgememoo.core import DB_PATH, get_conn, INIT_SQL
+    from forgememo.core import DB_PATH, get_conn, INIT_SQL
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = get_conn()
@@ -360,7 +360,7 @@ def init(
     _auto_detect_and_generate_skills(yes)
 
     # Provider setup — runs only if still unconfigured (Ollama declined or not detected)
-    from forgememoo import config as fm_cfg
+    from forgememo import config as fm_cfg
 
     _prompt_provider_setup(yes)
 
@@ -555,7 +555,7 @@ def start(
     ] = 3600,
 ):
     """Start the MCP server. On macOS: installs a LaunchAgent plist."""
-    from forgememoo import config as fm_cfg
+    from forgememo import config as fm_cfg
 
     if fm_cfg.load().get("provider") is None:
         console.print(
@@ -630,9 +630,9 @@ def status(
     ),
 ):
     """Show DB stats, server health, and skill status."""
-    from forgememoo.core import DB_PATH, get_conn
-    from forgememoo import config as fm_cfg
-    from forgememoo.config import detect_ollama
+    from forgememo.core import DB_PATH, get_conn
+    from forgememo import config as fm_cfg
+    from forgememo.config import detect_ollama
 
     # Credits-exhausted warning (shown before anything else)
     flag = fm_cfg.get_credits_flag()
@@ -767,7 +767,7 @@ def search(
     format: str = typer.Option("md", help="md|json"),
 ):
     """Search memory traces and principles."""
-    from forgememoo.core import cmd_retrieve
+    from forgememo.core import cmd_retrieve
 
     args = argparse.Namespace(
         query=query,
@@ -789,7 +789,7 @@ def store(
     principle: Optional[str] = typer.Option(None),
 ):
     """Save a memory trace."""
-    from forgememoo.core import cmd_save
+    from forgememo.core import cmd_save
 
     # Auto-detect project from git if not passed
     if project is None:
@@ -811,7 +811,7 @@ def store(
 @app.command()
 def mine():
     """Run the memory scanner."""
-    from forgememoo import scanner
+    from forgememo import scanner
 
     with console.status("[dim]Scanning repos and memory files...[/]"):
         scanner.main()
@@ -820,7 +820,7 @@ def mine():
 @app.command()
 def distill(target: str = typer.Argument("all")):
     """Distill undistilled traces into principles."""
-    from forgememoo.core import cmd_distill
+    from forgememo.core import cmd_distill
 
     # target can be a session id or "all"
     session = None if target == "all" else target
@@ -862,7 +862,7 @@ def config(
       forgememo config ollama --ollama-url http://host:11434  # remote Ollama\n
       forgememo config forgememo                           # use Forgemem starter inference\n
     """
-    from forgememoo import config as fm_cfg
+    from forgememo import config as fm_cfg
 
     if provider is None or show:
         current = fm_cfg.load()
@@ -899,7 +899,7 @@ def config(
     fm_cfg.set_provider(provider, api_key=key)
 
     if provider == "ollama":
-        from forgememoo.config import detect_ollama
+        from forgememo.config import detect_ollama
 
         ollama = detect_ollama()
         if ollama:
@@ -967,7 +967,7 @@ def _do_auth_login() -> bool:
     import threading
     import secrets
     import urllib.parse
-    from forgememoo import config as fm_cfg
+    from forgememo import config as fm_cfg
 
     port = 47474
     state = secrets.token_urlsafe(16)
@@ -1142,7 +1142,7 @@ def auth(
       forgememo auth status   # show current auth state\n
       forgememo auth logout   # remove stored token\n
     """
-    from forgememoo import config as fm_cfg
+    from forgememo import config as fm_cfg
 
     if action == "status":
         token = fm_cfg.load().get("forgememo_token")
@@ -1167,7 +1167,7 @@ def auth(
     if action == "login":
         result = _do_auth_login()
         if result:
-            from forgememoo import config as fm_cfg
+            from forgememo import config as fm_cfg
 
             token = fm_cfg.load().get("forgememo_token", "")
             _do_post_auth_setup(token)
@@ -1200,8 +1200,8 @@ def sync(
     import sqlite3
     import requests as req
     from datetime import datetime, timezone
-    from forgememoo import config as fm_cfg
-    from forgememoo.core import DB_PATH
+    from forgememo import config as fm_cfg
+    from forgememo.core import DB_PATH
 
     token = fm_cfg.load().get("forgememo_token")
     if not token:
@@ -1389,8 +1389,8 @@ def skill(
 @app.command()
 def help():
     """Show onboarding guide and command reference."""
-    from forgememoo.core import DB_PATH
-    from forgememoo import config as fm_cfg
+    from forgememo.core import DB_PATH
+    from forgememo import config as fm_cfg
 
     provider = fm_cfg.load().get("provider") or "[yellow]not set[/]"
     db_ok = (
@@ -1437,7 +1437,7 @@ def mcp(http: bool = typer.Option(False)):
             err=True,
         )
 
-    from forgememoo import mcp_server
+    from forgememo import mcp_server
 
     mcp_server.mcp.run()
 

@@ -34,7 +34,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import after logging setup
-from forgememoo.api import create_app, init_pool, init_db, webhook_retry_worker  # noqa: E402
+from forgememo.api import create_app, init_pool, init_db, webhook_retry_worker  # noqa: E402
 import threading  # noqa: E402
 
 

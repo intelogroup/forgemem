@@ -11,14 +11,14 @@ from pathlib import Path
 CONFIG_PATH = Path(os.environ.get("FORGEMEM_CONFIG", Path.home() / ".forgemem" / "config.json"))
 CREDITS_FLAG_PATH = CONFIG_PATH.parent / ".credits_exhausted"
 
-SUPPORTED_PROVIDERS = ("anthropic", "openai", "gemini", "ollama", "forgemem")
+SUPPORTED_PROVIDERS = ("anthropic", "openai", "gemini", "ollama", "forgememo")
 
 DEFAULT_MODELS = {
     "anthropic": "claude-haiku-4-5-20251001",
     "openai": "gpt-4o-mini",
     "gemini": "gemini-2.0-flash",
     "ollama": "llama3.2",  # auto-detected from running instance if available
-    "forgemem": "claude-haiku-4-5-20251001",  # managed — model chosen server-side
+    "forgememo": "claude-haiku-4-5-20251001",  # managed — model chosen server-side
 }
 
 OLLAMA_DEFAULT_URL = "http://localhost:11434"

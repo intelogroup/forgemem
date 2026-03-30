@@ -21,7 +21,7 @@ def call(prompt: str, max_tokens: int = 300, model: str | None = None) -> str:
         return _call_gemini(prompt, max_tokens, model)
     elif provider == "ollama":
         return _call_ollama(prompt, max_tokens, model)
-    elif provider == "forgemem":
+    elif provider == "forgememo":
         return _call_forgemem_managed(prompt, max_tokens, model)
     else:
         print(f"ERROR: Unknown provider '{provider}'. Run: forgemem config provider anthropic", file=sys.stderr)
@@ -148,7 +148,7 @@ def _call_ollama(prompt: str, max_tokens: int, model: str) -> str:
     return resp.json().get("response", "").strip()
 
 
-MANAGED_API_URL = os.environ.get("FORGEMEM_API_URL", "https://api.forgemem.com") + "/v1/inference"
+MANAGED_API_URL = os.environ.get("FORGEMEM_API_URL", "https://api.forgememo.com") + "/v1/inference"
 
 
 def _call_forgemem_managed(prompt: str, max_tokens: int, model: str) -> str:

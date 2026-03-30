@@ -154,31 +154,58 @@ When a user picks "forgemem" as their managed provider during `forgemem init`, t
 
 ## Technical Deep Dives
 
-### How Can ForgeMem Provide Free Models as Inference (Like an AI Subscription)?
+### Business Model Reality: Who Pays, Who Doesn't
 
-The goal: users pick "forgemem" as their provider during `forgemem init` and get distillation that "just works" — no API keys, no Ollama install, no model management. It should feel like a subscription service.
-
-**There are three viable architectures:**
-
-#### Option A: Hosted Inference on Oracle Cloud (Recommended First Step)
-
-ForgeMem already has this partially built (`POST /v1/inference` in `server/main.py`). Today it proxies to Anthropic's API. The change: **swap the backend from Anthropic to a self-hosted cheap model on Oracle Cloud.**
+Before the architecture, the revenue model must be clear:
 
 ```text
-User's CLI                    Oracle Cloud (ForgeMem Server)
+forgemem init -> "Choose your provider"
+
+  "ollama"      -> 100% local, NO auth, no cloud, FREE
+                   (traction play -- gets users in the door)
+
+  "anthropic"   -> BYOK, NO auth, no cloud, FREE
+  "openai"      -> BYOK, NO auth, no cloud, FREE
+  "gemini"      -> BYOK, NO auth, no cloud, FREE
+                   (these users may convert to forgemem later)
+
+  "forgemem"    -> OAuth login, cloud inference, PAID  <-- REVENUE
+                   (this is the ONLY path that requires auth)
+```
+
+**Key rules:**
+- **Ollama/BYOK users are never authed.** No account, no cloud, no sync. Everything stays in `~/.forgemem/forgemem_memory.db`. They are free users who may convert later.
+- **Auth only happens when user picks "forgemem" as provider.** That's the moment they create an account (OAuth), get a JWT, and start using paid cloud inference for mining and distillation.
+- **SQLite DB stays local by default.** Cloud sync is an explicit opt-in (`forgemem sync`), only available to authed "forgemem" provider users. Solo devs with one computer never need it.
+- **Ollama makes zero revenue** but drives adoption. The funnel: Ollama (free) -> hits quality ceiling -> switches to "forgemem" provider (paid).
+
+---
+
+### How Can ForgeMem Provide Inference Like an AI Subscription?
+
+The goal: when a user picks "forgemem" as provider, distillation "just works" -- no API keys, no model management. The user pays ForgeMem, ForgeMem handles the rest.
+
+#### Hosted Inference on Oracle Cloud (The Revenue Path)
+
+ForgeMem already has this partially built (`POST /v1/inference` in `server/main.py`). Today it proxies to Anthropic's API. The change: **swap the Anthropic backend for a self-hosted cheap model on Oracle Cloud.**
+
+```text
+User picks "forgemem" provider        Oracle Cloud (ForgeMem Server)
 ───────────                   ─────────────────────────────
 forgemem init
-  → picks "forgemem"
-  → OAuth login
-  → gets JWT
+  -> picks "forgemem"
+  -> GitHub/Google OAuth -----------> creates account, issues JWT
+  -> JWT saved to config.json
 
-daily_scan.py runs
-  → calls inference.py
-  → POST /v1/inference ──────→ FastAPI receives request
-     Bearer: <jwt>               → routes to vLLM/TGI serving Gemma-3-4B-IT
-                                 → model runs on Oracle A10 GPU (or CPU for small models)
-                              ←── returns distilled principles
-  → saves to local SQLite
+daily_scan.py runs (lid open)
+  -> inference.py detects provider="forgemem"
+  -> POST /v1/inference -----------> FastAPI receives request
+     Bearer: <jwt>                    -> verifies JWT, checks credits
+                                      -> routes to vLLM serving Gemma-3-4B-IT
+                                      -> deducts credits
+                                   <-- returns distilled principles
+  -> saves to LOCAL SQLite only
+  -> (cloud sync only if user opted in)
 ```
 
 **How to do it:**
@@ -189,40 +216,35 @@ daily_scan.py runs
    # Instead of: client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
    # Use: requests.post("http://vllm-internal:8000/v1/completions", ...)
    ```
-4. **Cost model changes**: no more per-token Anthropic cost. Fixed infra cost (~$50-150/mo for a GPU instance) amortized across all users. Platform fee ($0.02/call) now has real margin.
-5. Users see no difference — same `POST /v1/inference`, same JWT auth, same response format
+4. **Cost model flips**: no per-token Anthropic cost. Fixed infra (~$50-150/mo GPU instance) amortized across users. Platform fee ($0.02/call) becomes real margin.
+5. Users see no difference -- same endpoint, same JWT, same response format
 
-**Pros:** Fastest to ship, users get zero-config experience, real margin on inference.
-**Cons:** Server cost scales with users (but Oracle free tier + spot instances help). Single point of failure.
+**Why this is the revenue path:**
+- Ollama users pay nothing -> ForgeMem earns nothing
+- BYOK users pay their own provider -> ForgeMem earns nothing
+- "forgemem" provider users pay credits -> **ForgeMem earns margin on every distillation call**
+- Self-hosting the model means the margin is infra cost, not Anthropic's markup
 
-#### Option B: Bundled Local Model via Ollama (Zero Server Cost)
+#### Ollama: The Free Tier / Traction Play (Zero Revenue)
 
-Ship a ForgeMem-branded model that auto-installs via Ollama on the user's machine.
+Ollama users are **not customers, they're future customers.** The strategy:
 
 ```text
-forgemem init
-  → picks "forgemem"
-  → detects: Ollama installed?
-     YES → ollama pull forgemem/distill-4b
-     NO  → auto-installs Ollama + pulls model
-  → config.json: provider="forgemem-local"
-
-daily_scan.py runs
-  → calls http://localhost:11434/api/generate
-  → model: "forgemem/distill-4b"
-  → zero network calls, zero cost
+Day 1:   User picks ollama -> free, works for basic distillation
+Day 30:  User notices: principles from llama3.2 are mediocre
+         compared to what "forgemem" provider extracts
+Day 31:  User runs: forgemem config provider forgemem
+         -> OAuth login -> starts paying -> better principles
 ```
 
-**How to do it:**
-1. Fine-tune Gemma 3 4B IT (or Phi-4-mini) on distillation examples (synthetic data from Claude outputs)
-2. Publish to Ollama registry as `forgemem/distill-4b` (Ollama supports custom model registries)
-3. During `forgemem init`, auto-detect or install Ollama, pull the model
-4. Route inference to localhost Ollama — already implemented in `inference.py` `_call_ollama()`
+Ollama is the gateway. It works, it's free, but the quality ceiling pushes users toward the paid tier. **Do not invest in making Ollama quality great** -- that's the whole point.
 
-**Pros:** Zero server cost, works offline, infinite scale (each user runs their own).
-**Cons:** Requires ~4GB disk + RAM on user's machine. Ollama dependency. Quality depends on fine-tuning.
+What to invest in:
+- Make Ollama setup frictionless (auto-detect, auto-pull model)
+- Make the quality gap visible (e.g., "forgemem" principles have higher impact scores)
+- Make switching from ollama to forgemem a one-command upgrade
 
-#### Option C: Hybrid (Best of Both — Recommended Long-Term)
+#### Future: Hybrid Fallback (Long-Term)
 
 ```text
 ┌──────────────────────────────────────────────────────────┐
@@ -236,149 +258,120 @@ daily_scan.py runs
 └──────────────────────────────────────────────────────────┘
 ```
 
-Change `_call_forgemem_managed()` in `inference.py` to:
-1. Try cloud endpoint first
-2. If network fails or credits exhausted → fall back to local Ollama model
+For "forgemem" provider users only: change `_call_forgemem_managed()` in `inference.py` to:
+1. Try cloud endpoint first (paid, best quality)
+2. If network fails or credits exhausted -> fall back to local Ollama model (free, good-enough)
 3. User never notices the switch
 
-This is how ForgeMem feels like a "subscription" — it always works, online or off.
+This makes "forgemem" provider feel like a subscription that always works, online or off. But this is a later optimization -- ship cloud-only first.
 
 ---
 
 ### How Can ForgeMem Auto-Mine While the MacBook Lid Is Closed?
 
-**The core problem:** When a MacBook lid closes, macOS enters sleep. LaunchAgents don't run. The current `com.forgemem.miner.plist` daemon stops. Mining stops.
+**The core problem:** macOS sleeps when the lid closes. LaunchAgents stop. Mining stops.
 
-**There are three approaches, from simplest to most robust:**
+**The answer: mine on the server, not the laptop.** But only for "forgemem" provider users who opted into sync.
 
-#### Approach 1: Move Mining to the Cloud (Recommended)
+#### Who Gets Cloud Mining?
 
-Don't mine on the laptop at all. Mine on the server, triggered by git activity.
+- **Provider = ollama / BYOK** -> NO cloud mining. Mining only runs locally via LaunchAgent. Lid closed = no mining. That's fine -- it's the free tier. Everything stays in local SQLite.
+- **Provider = forgemem + opted into sync** -> YES cloud mining. Server mines via GitHub webhooks. Lid closed = mining continues server-side. Principles stored in Oracle MySQL. Synced to local SQLite when laptop wakes. THIS IS A PAID FEATURE.
+
+Cloud mining is a **premium feature** that only "forgemem" provider users get. It's part of what they're paying for.
+
+#### The Architecture: GitHub Webhooks -> Server-Side Mining
 
 ```text
 Developer pushes code                 Oracle Cloud Server
 ─────────────────────                 ──────────────────
 git push origin main
-  → GitHub webhook fires ────────────→ POST /webhooks/github
-                                        → server clones/pulls repo
-                                        → extracts last 24h commits
-                                        → runs distillation (vLLM local)
-                                        → saves principles to MySQL
+  -> GitHub webhook fires -----------> POST /webhooks/github
+                                        -> fetches diff via GitHub API
+                                        -> distills via local vLLM
+                                        -> saves to MySQL (user's account)
+                                        -> deducts credits
 
 MacBook wakes up next morning
-  → forgemem sync (or auto-sync)
-  → GET /v1/sync/pull ───────────────→ returns new principles
-  → inserts into local SQLite
-  → agent has fresh knowledge ✓
+  -> LaunchAgent fires on wake
+  -> forgemem sync (auto)
+  -> GET /v1/sync/pull ---------------> returns principles mined overnight
+  -> inserts into local SQLite
+  -> agent has fresh knowledge
 ```
 
-**How to do it:**
-1. Add a `POST /webhooks/github` endpoint to `server/main.py`
-2. User connects their GitHub repos during OAuth signup (GitHub OAuth already gives repo access)
-3. On each push event, server:
-   - Fetches the diff/commits via GitHub API (no clone needed)
-   - Runs distillation via local vLLM (same infra as Option A above)
-   - Stores principles in MySQL (`sync_principles` table)
-4. When laptop wakes, `forgemem sync` pulls new principles
-5. Optional: make sync automatic on wake via macOS `NSWorkspaceDidWakeNotification` hook in the LaunchAgent
+**Prerequisites (in order):**
+1. **GitHub OAuth** -- user authenticates, grants repo access
+2. **User opts into sync** -- explicit consent to send data to cloud
+3. **User connects repos** -- picks which repos to auto-mine (not all by default)
+4. **Webhook registration** -- server registers GitHub webhooks on selected repos
+5. **Server-side mining** -- port `daily_scan.py` extraction logic to `server/main.py`
 
-**Why this is the right answer:**
-- Lid open or closed doesn't matter — mining happens server-side
-- GitHub webhooks are real-time (not polling on a cron)
-- Pairs naturally with OAuth (GitHub token grants repo access)
-- Leverages Oracle Cloud infra already in place
-- The `sync` system already exists and works
+**What's needed to build:**
+- `POST /webhooks/github` endpoint in `server/main.py` (~50 lines)
+- GitHub API integration to fetch commit diffs (`PyGithub` or raw REST)
+- Server-side distillation function (reuse `daily_scan.py` extraction logic + vLLM)
+- Repo management UI in webapp (select repos, enable/disable webhooks)
+- Auto-sync on wake: add `WatchPaths` trigger to LaunchAgent plist for network changes
 
-**What's needed:**
-- GitHub webhook receiver endpoint (~50 lines in `server/main.py`)
-- GitHub API integration to fetch commit diffs (use `PyGithub` or raw REST)
-- Server-side mining function (port `daily_scan.py` logic to server)
-- Auto-sync on wake (optional, ~10 lines in LaunchAgent plist)
+#### macOS Power Nap / pmset Wake (Not Recommended)
 
-#### Approach 2: macOS Power Nap (Limited but Free)
+These try to keep the laptop mining locally:
+- **Power Nap**: unreliable for third-party daemons, Apple controls access
+- **pmset scheduled wake**: requires `sudo`, wakes entire machine, hacky
 
-macOS Power Nap allows certain tasks to run during sleep **on AC power**:
-- Network activity (push notifications, iCloud sync)
-- Time Machine backups
-- Software updates
-
-**Limitations:**
-- Only works on AC power (not battery)
-- Apple controls which processes get Power Nap access — LaunchAgents can request it but macOS may deny it
-- Unreliable for custom daemons
-
-**How to try it:** Add this key to the LaunchAgent plist:
-```xml
-<key>ProcessType</key>
-<string>Background</string>
-```
-
-And set `launchctl` to allow background processing. But this is fragile and Apple doesn't document guarantees for third-party daemons.
-
-**Verdict:** Not reliable enough to depend on. Use as a "nice to have" alongside cloud mining.
-
-#### Approach 3: Keep Laptop Awake with Scheduled Wake (macOS pmset)
-
-macOS can schedule wake events:
-```bash
-# Wake at 3 AM daily, run mining, sleep again
-sudo pmset repeat wakeorpoweron MTWRFSU 03:00:00
-```
-
-The LaunchAgent runs mining during the wake window, then the Mac sleeps again.
-
-**Limitations:**
-- Requires `sudo` to configure (not great for CLI tool UX)
-- Wakes the entire machine (display stays off but fans/disk spin up)
-- Battery drain if not on AC power
-- Users may find this intrusive
-
-**Verdict:** Works but feels hacky. Only viable as an opt-in power-user feature.
+**Verdict:** Don't bother. Cloud mining is the right answer and it's also the paid feature that justifies the subscription.
 
 ---
 
-### Recommended Architecture: Cloud Mining + Hybrid Inference
+### Recommended Architecture (Updated)
 
 ```text
-┌─────────────────────────────────────────────────────────────────┐
-│                        USER'S MACHINE                           │
-│                                                                 │
-│  forgemem init → OAuth (GitHub) → gets JWT + repo access        │
-│                                                                 │
-│  Lid open:                                                      │
-│    daily_scan.py → local Ollama (forgemem/distill-4b)           │
-│    OR → cloud inference (api.forgemem.com/v1/inference)          │
-│    Results saved to local SQLite                                │
-│                                                                 │
-│  Lid closed:                                                    │
-│    Nothing runs locally. That's fine.                           │
-│                                                                 │
-│  Lid opens again:                                               │
-│    forgemem sync → pulls principles mined while lid was closed  │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-                                │ sync + webhooks
-                                │
-┌───────────────────────────────▼─────────────────────────────────┐
-│                     ORACLE CLOUD SERVER                          │
-│                                                                 │
-│  GitHub webhook → receives push events                          │
-│    → fetches commits via GitHub API                             │
-│    → distills via vLLM (Gemma 3 4B IT on A10 GPU)              │
-│    → stores in MySQL (sync_principles table)                    │
-│                                                                 │
-│  Cron fallback → every 6h, check for repos with no webhook      │
-│    → poll GitHub API for recent commits                         │
-│    → same distillation pipeline                                 │
-│                                                                 │
-│  /v1/sync/pull → serves fresh principles to waking laptops      │
-│  /v1/inference → serves distillation for online CLI users        │
-└─────────────────────────────────────────────────────────────────┘
+USER'S MACHINE
+===============
+Provider: ollama / BYOK
+  -> Everything local. No auth. No cloud. No sync.
+  -> Mining via LaunchAgent (lid must be open)
+  -> SQLite DB stays on this machine forever
+  -> FREE
+
+Provider: forgemem
+  -> OAuth login (GitHub/Google) -> JWT
+  -> Mining via cloud inference (POST /v1/inference)
+  -> Results saved to local SQLite
+  -> OPTIONAL: opt into sync -> cloud also has your principles
+  -> OPTIONAL: opt into cloud mining -> lid-closed mining works
+  -> PAID (credits)
+
+Lid opens after sleep:
+  -> if synced: forgemem sync pulls overnight principles
+  -> if not synced: nothing changed, local DB intact
+
+                    | (only forgemem provider + sync opt-in)
+                    v
+ORACLE CLOUD SERVER
+====================
+vLLM (Gemma 3 4B IT)  <-- serves /v1/inference for forgemem users
+
+GitHub webhooks        <-- mines repos while laptop sleeps
+  -> only for opted-in repos
+  -> distills via same vLLM
+  -> stores in MySQL (per-user, per-device)
+
+/v1/sync/pull          <-- serves principles to waking laptops
+/v1/sync/push          <-- receives local traces (opt-in only)
+
+MySQL (Oracle Cloud)   <-- user data only for opted-in users
+Auth (GitHub/Google)   <-- only for "forgemem" provider users
 ```
 
-**This architecture answers both questions:**
-1. **Free model inference** → hybrid local Ollama + hosted vLLM on Oracle Cloud
-2. **Lid-closed mining** → GitHub webhooks trigger server-side mining, sync on wake
+**The funnel:**
+1. `ollama` -> free, local, good-enough quality -> **traction**
+2. User hits quality ceiling -> switches to `forgemem` provider -> **revenue**
+3. User wants multi-device -> opts into sync -> **stickiness**
+4. User wants lid-closed mining -> connects GitHub repos -> **lock-in**
+
+Each step increases value AND switching cost. That's the moat.
 
 ---
 

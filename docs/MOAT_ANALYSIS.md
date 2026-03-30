@@ -185,19 +185,56 @@ When a user picks "forgemem" as their managed provider during `forgemem init`, t
 - **Google OAuth** — covers non-GitHub users, enterprise Google Workspace accounts
 - **Keep magic link** as fallback for users without GitHub/Google
 
-**Implementation options:**
+**Implementation options (researched March 2026):**
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| **NextAuth.js (Auth.js v5)** | Battle-tested, built-in GitHub + Google providers, session management, JWT/DB adapters | Replaces existing hand-rolled auth; migration effort |
-| **Add OAuth to existing system** | Keep current JWT flow, just add GitHub/Google as token sources in `server/auth.py` | More custom code to maintain, security surface area |
-| **Clerk / Auth0 / Supabase Auth** | Zero auth code, hosted UI, SOC2 | Vendor lock-in, monthly cost, less control |
+| Provider | Free Tier | Pricing at Scale | Oracle MySQL Compat | Integration Effort | Verdict |
+|----------|-----------|-------------------|--------------------|--------------------|---------|
+| **WorkOS AuthKit** | **1M MAU free** | $0.30/MAU after 1M | ✅ JWT-only — your DB, your schema | Medium (official FastAPI SDK + Next.js SDK) | **🏆 Recommended** |
+| **Auth.js v5 + Drizzle** | **Free forever** | $0 (self-hosted) | ✅ Drizzle MySQL adapter writes directly to Oracle MySQL | Medium-High (replace `server/auth.py`, add Drizzle schema) | **Strong alternative** |
+| **Clerk** | 50K MAU free | **~$1,000+/mo at 100K MAU** ($0.02/MAU) | ⚠️ JWT verification only — user data lives in Clerk | Low (drop-in React components) | Too expensive at scale |
+| **Oracle IDCS** | None | **$3-10/user/month** | ✅ Native Oracle integration | High (SAML/OIDC only, no Next.js/FastAPI SDK) | Skip — overpriced, enterprise-only |
+| **Supabase Auth** | 50K MAU free | $0.00325/MAU | ❌ Forces Postgres (unused DB alongside Oracle) | Low | Skip — wrong DB dependency |
 
-**Open questions:**
-- Migrate to NextAuth.js or bolt OAuth onto the existing custom auth? NextAuth is cleaner but means reworking `server/auth.py` + `webapp/middleware.ts`
-- Does the CLI loopback flow (`127.0.0.1:47474/callback`) need to change for OAuth? Currently it expects a JWT back — OAuth would add a code-exchange step
-- Should GitHub OAuth also pull repo list for auto-mining scope? (Nice UX but bigger scope)
-- Google Workspace support — does this open a path to team/org-level accounts?
+#### Recommendation: WorkOS AuthKit (primary) or Auth.js (if zero-cost is critical)
+
+**Why WorkOS wins for ForgeMem:**
+1. **1M MAU free** — effectively free until ForgeMem hits serious scale
+2. **Official FastAPI SDK** (`workos-python`) — `verify_session()` in `server/auth.py` replaces hand-rolled JWT verification
+3. **Built-in magic link + GitHub + Google** — all three flows with zero custom OAuth code
+4. **JWT-only model** — WorkOS handles identity, ForgeMem keeps all user/billing data in Oracle MySQL. No vendor lock-in on user data
+5. **CLI loopback flow preserved** — WorkOS supports PKCE + custom redirect URIs, so `127.0.0.1:47474/callback` still works
+
+**Architecture with WorkOS:**
+```text
+CLI (forgemem init → "forgemem" provider)
+  → Opens browser to webapp/auth
+  → WorkOS AuthKit handles GitHub/Google/magic link
+  → WorkOS returns JWT to webapp
+  → Webapp redirects to 127.0.0.1:47474/callback?token=<jwt>
+  → CLI stores JWT in ~/.forgemem/config.json
+
+FastAPI (server/auth.py):
+  → workos.verify_session(token) replaces manual HS256 JWT decode
+  → On first auth, upsert user row in Oracle MySQL users table
+  → All billing/credits/sync data stays in Oracle MySQL
+```
+
+**Why Auth.js is the fallback:**
+- **$0 forever** — no per-MAU pricing at any scale
+- **Drizzle MySQL adapter** writes `users`, `accounts`, `sessions` tables directly into Oracle MySQL — total data ownership
+- Requires more code changes: replace `server/auth.py` entirely, add Drizzle schema migration, handle Next.js ↔ FastAPI session sharing
+- Better if the team wants zero external auth dependencies
+
+**Why NOT Clerk:** At $0.02/MAU, 100K users = $1K/mo. ForgeMem's free-tier Ollama users would count against MAU. The math doesn't work for a tool with a large free user base.
+
+**Why NOT Oracle IDCS:** Enterprise-only pricing ($3-10/user/month), SAML-focused, no modern SDK for Next.js or FastAPI. Designed for internal corporate SSO, not consumer developer tools.
+
+**Migration path from current magic link:**
+1. Add WorkOS AuthKit to webapp (`@workos-inc/nextjs`)
+2. Replace `server/auth.py` JWT verification with `workos.verify_session()`
+3. Keep existing `users` table in Oracle MySQL — WorkOS only handles identity
+4. CLI loopback flow: swap magic link callback for WorkOS PKCE callback
+5. Existing JWTs: add migration middleware that accepts old HS256 JWTs for 30 days, then expire
 
 ---
 

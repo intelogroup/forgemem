@@ -58,6 +58,7 @@ webapp/
 # Internal docs
 docs/
 plan.md
+daily_scan.py
 
 # Internal server (managed service — not for public)
 server/

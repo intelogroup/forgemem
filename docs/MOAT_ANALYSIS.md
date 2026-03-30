@@ -953,3 +953,331 @@ Uses macOS Keychain, Windows Credential Locker, Linux Secret Service automatical
 The `retryable` field lets agents decide whether to retry or bail. **Source:** [Writing CLI Tools That AI Agents Actually Want to Use](https://dev.to/uenyioha/writing-cli-tools-that-ai-agents-actually-want-to-use-39no)
 
 **Opt-in anonymous telemetry.** Track command invoked, success/failure, latency, memory count, provider type. Never track content, keys, or paths. Opt-out via `FORGEMEM_TELEMETRY=false` or `DO_NOT_TRACK=1`. Pattern from [Chroma](https://docs.trychroma.com/telemetry) and [PostHog Python SDK](https://posthog.com/docs/libraries/python). ForgeMem already has `device_id` in config — use it as the anonymous identifier.
+
+---
+
+## Technical Deep Dive: Adding Embedding / Vector Search
+
+### Why This Matters
+
+ForgeMem's current search is FTS5 (keyword matching / BM25). It works well for exact terms but fails on semantic queries:
+
+```text
+# FTS5 finds this:
+forgemem search "connection pooling"  →  ✓ matches "connection pooling" in text
+
+# FTS5 misses this:
+forgemem search "database too many open handles"  →  ✗ no match
+  (but the "connection pooling" principle IS the answer)
+```
+
+Vector/embedding search fixes this — it matches by meaning, not keywords. This is the #1 retrieval quality improvement ForgeMem can make.
+
+### The Architecture: Hybrid Search (FTS5 + Vector)
+
+Don't replace FTS5. **Add vector search alongside it** and merge results. This is called hybrid search and consistently outperforms either approach alone.
+
+```text
+Agent query: "database too many open handles"
+                    │
+        ┌───────────┴───────────┐
+        ▼                       ▼
+   FTS5 (BM25)           Vector (cosine)
+   keyword match          semantic match
+        │                       │
+   Results:               Results:
+   (empty or weak)        "Use connection pooling
+                           to manage DB handles"
+        │                       │
+        └───────────┬───────────┘
+                    ▼
+           Reciprocal Rank Fusion (RRF)
+           merge + re-rank
+                    │
+                    ▼
+           Final results (best of both)
+```
+
+**Reciprocal Rank Fusion (RRF)** is the standard merging algorithm:
+```python
+def rrf_score(rank_keyword, rank_vector, k=60):
+    score = 0
+    if rank_keyword is not None:
+        score += 1.0 / (k + rank_keyword)
+    if rank_vector is not None:
+        score += 1.0 / (k + rank_vector)
+    return score
+```
+
+### Local vs Cloud: Same Split as Inference
+
+The embedding strategy follows the same business model as inference:
+
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│  forgemem init → "Choose your provider"                          │
+│                                                                  │
+│  ┌─ "ollama"      → local embeddings via Ollama                  │
+│  │                  (nomic-embed-text or all-minilm)             │
+│  │                  FREE, runs on device, ~100ms per embedding   │
+│  │                                                               │
+│  ├─ "anthropic"   → Voyage AI embeddings (Anthropic's partner)   │
+│  ├─ "openai"      → text-embedding-3-small ($0.02/1M tokens)    │
+│  ├─ "gemini"      → Gemini embedding-001 (free tier available)   │
+│  │                  BYOK, user pays their own provider           │
+│  │                                                               │
+│  └─ "forgemem"    → cloud embeddings via Oracle Cloud            │
+│                     (self-hosted model, same as inference)        │
+│                     PAID, included in forgemem credits            │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Implementation Plan: 4 Phases
+
+#### Phase 1: sqlite-vec Extension (The Foundation)
+
+**sqlite-vec** (by Alex Garcia) is the right choice for local vector storage. It's a SQLite extension that adds vector columns and KNN search — no external database needed. ForgeMem stays single-file SQLite.
+
+**Schema migration:**
+```sql
+-- New: vector storage for principles and traces
+CREATE VIRTUAL TABLE IF NOT EXISTS principles_vec USING vec0(
+    principle_id INTEGER PRIMARY KEY,
+    embedding    float[384]        -- 384 dims for all-MiniLM / nomic-embed-text
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS traces_vec USING vec0(
+    trace_id     INTEGER PRIMARY KEY,
+    embedding    float[384]
+);
+```
+
+**Installation:** `pip install sqlite-vec` — pure Python, no compilation. Works on macOS, Linux, Windows.
+
+**Query:**
+```sql
+-- KNN search: find 5 nearest principles to a query vector
+SELECT
+    pv.principle_id,
+    pv.distance,
+    p.principle,
+    p.impact_score,
+    p.project_tag
+FROM principles_vec pv
+JOIN principles p ON p.id = pv.principle_id
+WHERE pv.embedding MATCH ?       -- query vector (as JSON array or bytes)
+  AND k = ?                      -- number of results
+ORDER BY pv.distance
+```
+
+**Why sqlite-vec over alternatives:**
+- **sqlite-vss**: Deprecated by the same author in favor of sqlite-vec
+- **ChromaDB / Qdrant / Weaviate**: External services, violates local-first. Overkill for <100K vectors
+- **FAISS / hnswlib**: Separate index files, harder to keep in sync with SQLite
+- **sqlite-vec**: Single DB file, transactional, backs up with SQLite backup API, works with WAL mode
+
+#### Phase 2: Local Embedding Generation
+
+**For Ollama users (free tier):**
+
+Ollama already supports embedding models natively:
+```bash
+ollama pull nomic-embed-text    # 274MB, 768 dims, best quality/size
+ollama pull all-minilm           # 46MB, 384 dims, smallest
+```
+
+```python
+import requests
+
+def embed_local(text: str, model: str = "nomic-embed-text") -> list[float]:
+    resp = requests.post("http://localhost:11434/api/embed", json={
+        "model": model,
+        "input": text
+    })
+    return resp.json()["embeddings"][0]
+```
+
+**For BYOK users:**
+```python
+# OpenAI
+from openai import OpenAI
+client = OpenAI()
+resp = client.embeddings.create(model="text-embedding-3-small", input=text)
+embedding = resp.data[0].embedding  # 1536 dims
+
+# Anthropic doesn't have embeddings — use Voyage AI (their partner)
+# voyage-3-lite: $0.02/1M tokens, 512 dims
+```
+
+**For forgemem provider (paid):**
+Self-hosted on Oracle Cloud — same vLLM/TGI instance can serve both inference and embeddings. Or deploy a lightweight embedding model via `sentence-transformers` behind FastAPI.
+
+**Dimension normalization:** Different providers return different dimensions (384, 512, 768, 1536). Pick one canonical dimension and either:
+- Standardize on 384 (smallest, fastest, good enough for <100K docs)
+- Or use Matryoshka embeddings (OpenAI's text-embedding-3-small supports truncating to any dimension)
+
+**Recommendation:** Standardize on **384 dimensions** using `all-MiniLM-L6-v2` (local) or `text-embedding-3-small` truncated to 384 (cloud). This keeps the vector table small and KNN fast.
+
+#### Phase 3: Embed on Write, Search on Read
+
+**When a trace or principle is saved** (`core.cmd_save()`, `mcp_server.save_trace()`):
+1. Save to `traces` / `principles` table (existing flow)
+2. Generate embedding for the content/principle text
+3. Insert into `traces_vec` / `principles_vec`
+
+```python
+def save_trace_with_embedding(conn, trace_id, content, type, project):
+    # Existing: insert into traces + traces_fts
+    conn.execute("INSERT INTO traces ...", ...)
+    conn.execute("INSERT INTO traces_fts ...", ...)
+
+    # New: generate embedding + insert into traces_vec
+    embedding = embed(content)  # routes to configured provider
+    conn.execute(
+        "INSERT INTO traces_vec (trace_id, embedding) VALUES (?, ?)",
+        (trace_id, serialize_vec(embedding))
+    )
+```
+
+**When searching** (`core.cmd_retrieve()`, `mcp_server.retrieve_memories()`):
+1. Run FTS5 query (existing)
+2. Generate embedding for the query text
+3. Run KNN on `principles_vec` / `traces_vec`
+4. Merge results via Reciprocal Rank Fusion
+5. Return merged results
+
+```python
+def retrieve_hybrid(query: str, k: int = 5, project: str = None):
+    query_vec = embed(query)
+
+    # FTS5 results (keyword)
+    fts_results = fts5_search(query, k=k*2, project=project)
+
+    # Vector results (semantic)
+    vec_results = vector_search(query_vec, k=k*2, project=project)
+
+    # Merge via RRF
+    merged = reciprocal_rank_fusion(fts_results, vec_results)
+
+    return merged[:k]
+```
+
+**Fallback behavior:** If embedding generation fails (Ollama not running, API key missing, network down), fall back to FTS5-only. The user never sees an error — they just get keyword results instead of hybrid results. Log a warning to `~/.forgemem/debug.log`.
+
+#### Phase 4: Backfill Existing Data
+
+Existing traces and principles don't have embeddings. Add a migration command:
+
+```bash
+# One-time backfill of all existing data
+forgemem embed --backfill
+
+# Status check
+forgemem embed --status
+Embeddings: 142/156 traces, 38/42 principles (90.4%)
+Provider: ollama (nomic-embed-text)
+Vector table size: 1.2 MB
+```
+
+**Backfill strategy:**
+- Batch process in chunks of 50 (respect Ollama/API rate limits)
+- Show progress bar via Rich
+- Idempotent — skip rows that already have embeddings
+- Run automatically after `forgemem init` if embedding provider is configured
+
+### Cost Analysis
+
+| Provider | Model | Dims | Cost per 1K embeddings | ForgeMem scale (1K principles) |
+|----------|-------|------|----------------------|-------------------------------|
+| **Ollama (local)** | nomic-embed-text | 768 | Free | Free |
+| **Ollama (local)** | all-minilm | 384 | Free | Free |
+| **OpenAI** | text-embedding-3-small | 1536 | $0.02 | $0.02 |
+| **Voyage AI** | voyage-3-lite | 512 | $0.02 | $0.02 |
+| **Gemini** | embedding-001 | 768 | Free (< 1500 req/min) | Free |
+| **ForgeMem cloud** | self-hosted | 384 | Included in credits | ~$0.01 |
+
+At ForgeMem's scale (most users have <1K principles, <10K traces), embedding costs are negligible. The main cost is the one-time backfill.
+
+### Cloud Vector Search (for Sync Users)
+
+For users who opt into cloud sync + forgemem provider:
+
+```text
+┌───────────────────────────────────────────────────────┐
+│ LOCAL (user's machine)                                 │
+│   SQLite + sqlite-vec                                  │
+│   Local embeddings (Ollama) or cloud embeddings        │
+│   Hybrid search (FTS5 + vector)                        │
+│                                                        │
+│ ──── forgemem sync ──────────────────────────────────  │
+│                                                        │
+│ CLOUD (Oracle MySQL)                                   │
+│   MySQL + pgvector-compatible extension                │
+│   OR: separate vector index (hnswlib serialized)       │
+│   Server-side hybrid search for /v1/search endpoint    │
+│   Embeddings generated server-side (vLLM or sentence-  │
+│   transformers on same Oracle Cloud instance)          │
+└───────────────────────────────────────────────────────┘
+```
+
+**Cloud options for MySQL vector search:**
+- **Oracle MySQL HeatWave** has native vector store support (2024+)
+- **Serialize hnswlib index** — generate embeddings server-side, store in a binary column, load hnswlib index into memory for search
+- **Add a lightweight Qdrant instance** on Oracle Cloud if MySQL vector support is insufficient
+
+**Recommendation:** Start with local-only sqlite-vec. Add cloud vector search only when the sync user base justifies it. The local experience should be excellent first.
+
+### Migration Path (Backwards Compatible)
+
+```text
+Phase   What ships                    User impact
+─────   ──────────────────────────    ─────────────────────────────
+  1     sqlite-vec tables added       Zero — no behavior change
+        to schema migration           FTS5 still primary search
+
+  2     Embedding generation added    Users who configure embeddings
+        to save flow                  get vector search on new data
+
+  3     Hybrid search in retrieval    retrieve_memories returns
+                                      better results automatically
+
+  4     Backfill command              Users can embed existing data
+        forgemem embed --backfill     at their own pace
+```
+
+No breaking changes at any phase. Users who never configure embeddings keep using FTS5 exactly as today. The vector tables exist but stay empty. This is critical for the Ollama free tier — don't force embedding model downloads on users who didn't ask for it.
+
+### Config Changes
+
+```json
+// ~/.forgemem/config.json — new fields
+{
+    "provider": "ollama",
+    "embedding": {
+        "enabled": true,
+        "provider": "ollama",            // or "openai", "gemini", "forgemem"
+        "model": "nomic-embed-text",     // provider-specific model name
+        "dimensions": 384                // target dimensions
+    }
+}
+```
+
+Set during `forgemem init` with a new question:
+```
+Enable semantic search? (recommended, requires embedding model)
+> Yes — use Ollama (nomic-embed-text, free, 274MB download)
+  Yes — use my API provider (uses your configured API key)
+  No  — keep keyword search only
+```
+
+### Summary
+
+| Decision | Choice | Why |
+|----------|--------|-----|
+| Vector DB | sqlite-vec | Local-first, single file, backs up with SQLite |
+| Default embedding model | all-MiniLM-L6-v2 (384d) | Smallest, fastest, good enough |
+| Search strategy | Hybrid (FTS5 + vector + RRF) | Best of both, proven in research |
+| Embed timing | On write (not on read) | One-time cost, search stays fast |
+| Cloud vector | Oracle MySQL HeatWave or hnswlib | Only for sync users, later phase |
+| Backwards compat | Fully backwards compatible | Empty vector tables don't break anything |
+| Business model | Local embeddings free, cloud included in credits | Same split as inference |

@@ -1316,9 +1316,333 @@ Enable semantic search? (recommended, requires embedding model)
 | Decision | Choice | Why |
 |----------|--------|-----|
 | Vector DB | sqlite-vec | Local-first, single file, backs up with SQLite |
-| Default embedding model | all-MiniLM-L6-v2 (384d) | Smallest, fastest, good enough |
+| Default embedding model | nomic-embed-text v1.5 (384d Matryoshka) | Best quality/size, 8K context, upgradeable to 768d |
 | Search strategy | Hybrid (FTS5 + vector + RRF) | Best of both, proven in research |
 | Embed timing | On write (not on read) | One-time cost, search stays fast |
 | Cloud vector | Oracle MySQL HeatWave or hnswlib | Only for sync users, later phase |
 | Backwards compat | Fully backwards compatible | Empty vector tables don't break anything |
 | Business model | Local embeddings free, cloud included in credits | Same split as inference |
+
+---
+
+## UX Edge Cases, Billing Flows, and Provider Switching
+
+### Current State Audit
+
+We audited every user interaction path. Here are the critical gaps, a confirmed bug, and recommended fixes.
+
+### BUG: Billing Pack ID Mismatch (Checkout Broken)
+
+**Severity: CRITICAL — all credit purchases from webapp fail.**
+
+The webapp billing page (`webapp/app/billing/page.tsx`) sends `pack_5`, `pack_20`, `pack_50` as `pack_id` to `POST /v1/checkout`. But the server (`server/main.py`) expects `starter`, `pro`, `team`. Every checkout attempt returns 400.
+
+**Fix:** Align the pack IDs. Either change the frontend or the backend — one commit.
+
+### Problem: Mining Silently Dies on Credit Exhaustion
+
+**Severity: HIGH — users don't know mining stopped.**
+
+When `daily_scan.py` runs and credits run out on repo #3 of 5:
+1. `inference.call()` hits 402, calls `sys.exit(1)`
+2. Scanner catches `SystemExit`, returns `[]`
+3. Logs: "No meaningful learnings extracted" — **identical to repos with no commits**
+4. Continues to repos #4, #5 — both also fail silently with 402
+5. User sees no alert that the entire run failed due to credits
+
+**The user thinks mining is working. It's not.**
+
+**Recommended fix:**
+```python
+# In daily_scan.py — detect credit failure vs normal empty
+class CreditsExhaustedError(Exception):
+    pass
+
+# In inference.py — raise specific exception instead of sys.exit(1)
+if resp.status_code == 402:
+    raise CreditsExhaustedError(f"Balance: ${balance}")
+
+# In daily_scan.py — catch it and STOP the entire run
+try:
+    learnings = extract_learnings(repo, log)
+except CreditsExhaustedError as e:
+    log(f"CREDITS EXHAUSTED: {e} — stopping mining run")
+    log(f"Add credits: https://app.forgemem.com/billing")
+    log(f"Or switch provider: forgemem config provider anthropic --key ...")
+    # macOS notification
+    _notify("ForgeMem: Credits Exhausted", "Mining stopped. Add credits to resume.")
+    break  # Stop entire run, don't waste time on remaining repos
+```
+
+### Problem: No Retry on Transient Failures
+
+**Severity: MEDIUM — network blips cause silent data loss.**
+
+If the API returns a transient error (network timeout, 500, 503) during mining, the scanner silently skips that repo/file. No retry. Next scheduled run (1 hour later) will only mine the last 24h of commits — so the failed repo's commits may still be in window, but there's no guarantee.
+
+**Recommended fix:** Add simple retry with backoff for transient errors only:
+```python
+TRANSIENT_CODES = {429, 500, 502, 503}
+MAX_RETRIES = 2
+
+def call_with_retry(prompt, max_tokens, model):
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return inference.call(prompt, max_tokens, model)
+        except TransientError:
+            if attempt < MAX_RETRIES:
+                time.sleep(2 ** attempt)  # 1s, 2s
+                continue
+            raise
+```
+
+Don't retry on 401, 402, 404 — those are permanent failures.
+
+---
+
+### User Journey Fixes: The 10 Scenarios
+
+#### 1. Reinstall ForgeMem (`pip install forgemem` again)
+
+**Current:** Config (`~/.forgemem/config.json`) and DB (`~/.forgemem/forgemem_memory.db`) survive reinstall. Auto-runs `init(yes=True)` if DB missing. Works.
+
+**Gap:** If user reinstalls AND deletes `~/.forgemem/` (clean slate), running `forgemem init` starts fresh. If they previously had a forgemem account, they need to `forgemem auth login` again — but there's no prompt telling them this.
+
+**Fix:** During `forgemem init`, after provider selection, if user picks "forgemem":
+```
+Looks like you've selected the forgemem provider.
+Do you have an existing account?
+> Yes — log me in (opens browser)
+  No — create new account (opens browser)
+```
+Both paths go through the same OAuth/magic link flow, but the UX acknowledges returning users.
+
+#### 2. User Already Exists — Should Not Re-Signup
+
+**Current:** `forgemem auth login` always opens the magic link flow. If the email already exists in the server DB, it logs in (no duplicate account). If new email, creates account with free credits.
+
+**This actually works correctly** — magic link is idempotent by design. Same email = same account. But the UX doesn't communicate this.
+
+**Fix:** After successful auth, show:
+```
+Welcome back, user@email.com!
+Balance: $4.82  ·  Traces synced: 156
+```
+vs for new users:
+```
+Account created! Welcome to ForgeMem.
+Your $5 free credits are ready.
+```
+
+#### 3. Alert Low Credits Before They Hit Zero
+
+**Current:** No warning until credits hit zero (402). Then mining stops silently.
+
+**Fix:** Add a low-balance warning threshold. Check balance after each inference call:
+```python
+# In inference.py _call_forgemem_managed()
+balance = resp.json().get("balance_usd", 0)
+if balance < 1.0 and balance > 0:
+    # Don't exit — just warn
+    console.print(f"[yellow]Low credits:[/] ${balance:.2f} remaining. "
+                  f"Add credits: https://app.forgemem.com/billing")
+```
+
+Also add to `forgemem status`:
+```
+Credits: $0.82 ⚠️ LOW — estimated 41 mining runs remaining
+         Add credits → https://app.forgemem.com/billing
+```
+
+And on the server side: add a `low_balance` flag to inference responses when balance < $1.00:
+```json
+{"text": "...", "cost_usd": 0.02, "balance_usd": 0.82, "low_balance": true}
+```
+
+#### 4. Retry on Mining Failure
+
+See "Problem: No Retry on Transient Failures" above. Add 2-attempt retry with backoff for transient HTTP errors only.
+
+#### 5. Server Not Running (for HTTP API users)
+
+**Current:** Good error messages for Ollama ("make sure Ollama is running") and forgemem API ("check your connection"). MCP server is stdio-based so it's always spawned on demand.
+
+**Gap:** The Flask HTTP API daemon (`forgemem/daemon.py` on port 5555) has no health check or auto-restart.
+
+**Fix:** Add `forgemem doctor` (already in recommendations above) that checks:
+- Is the MCP server registered?
+- Is the HTTP daemon running? (`curl localhost:5555/health`)
+- Is Ollama reachable? (if provider=ollama)
+- Is forgemem API reachable? (if provider=forgemem)
+
+#### 6. Seamless Provider Switching
+
+**Current:** `forgemem config provider X --key Y` works instantly. But:
+- No warning when switching FROM forgemem (you lose cloud mining + sync)
+- No warning when switching TO forgemem (you need to auth first)
+- No migration of embedding config
+
+**Recommended UX:**
+
+```bash
+# Switching TO forgemem
+forgemem config provider forgemem
+> Switching to forgemem managed inference.
+> This enables: cloud mining, cross-device sync, lid-closed mining
+> You'll need to authenticate. Opening browser...
+> [browser opens for OAuth]
+
+# Switching FROM forgemem to BYOK
+forgemem config provider anthropic --key sk-ant-...
+> Switching to anthropic (BYOK).
+> Note: Cloud mining and cross-device sync will be disabled.
+> Your local SQLite database is unchanged — all memories stay on this machine.
+> Continue? [Y/n]
+
+# Switching FROM forgemem to ollama
+forgemem config provider ollama
+> Switching to ollama (local inference).
+> Note: Cloud mining and cross-device sync will be disabled.
+> Make sure Ollama is running: ollama serve
+> Continue? [Y/n]
+```
+
+#### 7. Adding Credits from CLI (Like Cline/OpenRouter)
+
+**Current:** CLI shows `https://app.forgemem.com/billing` as text. User must copy-paste into browser.
+
+**What Cline/OpenRouter do:** Open the billing page directly from the CLI with a pre-authenticated URL, show real-time balance updates.
+
+**Recommended approach:**
+
+```bash
+# Open billing page directly (with auth token for auto-login)
+forgemem billing
+
+> Opening billing page in your browser...
+> Current balance: $0.82
+> [browser opens https://app.forgemem.com/billing?token=<short-lived-jwt>]
+
+# Quick top-up without leaving terminal
+forgemem billing --add 20
+
+> Creating checkout for $20 Pro pack...
+> Opening Stripe checkout in browser...
+> [browser opens Stripe checkout URL]
+> Waiting for payment confirmation...
+> ✓ Payment confirmed! New balance: $20.82
+```
+
+**How the "waiting for payment" works:**
+1. CLI creates checkout via `POST /v1/checkout`
+2. Opens Stripe URL in browser
+3. Polls `GET /v1/balance` every 3 seconds (with 2-minute timeout)
+4. When balance increases, shows confirmation and exits
+
+**Add to server:** A `POST /v1/billing-link` endpoint that returns a short-lived pre-authenticated URL:
+```python
+@app.post("/v1/billing-link")
+def billing_link(user_id: str):
+    token = create_short_lived_jwt(user_id, expires_in=300)  # 5 min
+    return {"url": f"{WEBAPP_ORIGIN}/billing?auth={token}"}
+```
+
+#### 8. Usage and Billing Tracking (Like OpenRouter Dashboard)
+
+**Current:** Webapp shows last 20 runs in activity feed. No cost trends, no per-project breakdown, no monthly totals.
+
+**What OpenRouter does:**
+- Per-model cost breakdown
+- Daily/weekly/monthly usage charts
+- Per-API-key usage tracking
+- Rate limit status
+- Credit burn rate and estimated time to zero
+
+**Recommended additions to webapp:**
+
+```
+Dashboard:
+┌─────────────────────────────────────────┐
+│ Balance: $4.82         Burn rate: $0.48/day
+│ Estimated empty: 10 days
+│
+│ This month: $8.40 across 420 runs
+│ ├── Mining:      $6.20 (310 runs)
+│ ├── Distilling:  $1.80 (90 runs)
+│ └── Embeddings:  $0.40 (20 runs)
+│
+│ Top projects:
+│ ├── api:      $3.20 (160 runs)
+│ ├── frontend: $2.80 (140 runs)
+│ └── infra:    $2.40 (120 runs)
+└─────────────────────────────────────────┘
+```
+
+**Server changes needed:**
+- Add `run_type` field to `usage_runs` table: `"mine"`, `"distill"`, `"embed"`, `"search"`
+- Add `project_tag` to `usage_runs` for per-project breakdown
+- Add `GET /v1/usage/summary` endpoint returning aggregated stats
+
+**CLI additions:**
+```bash
+forgemem usage
+> This month: $8.40 / 420 runs
+> Balance: $4.82 (est. 10 days remaining)
+> Top project: api ($3.20)
+>
+> Details: https://app.forgemem.com/billing
+
+forgemem usage --json
+{"month_total": 8.40, "runs": 420, "balance": 4.82, "burn_rate_day": 0.48, ...}
+```
+
+#### 9. Auto-Detect Embedding Cost During Mining
+
+When embedding search is enabled AND using a paid provider, mining runs now cost more (inference + embedding per trace). Users should see this.
+
+**Recommended:** Show estimated cost before mining starts:
+```bash
+forgemem mine
+
+Scanning 5 repos for learnings...
+Provider: forgemem  ·  Estimated cost: ~$0.10 (inference) + ~$0.01 (embeddings)
+Balance: $4.82
+
+[ok] api — 3 learnings extracted ($0.06)
+[ok] frontend — 2 learnings extracted ($0.04)
+[!!] infra — credits low ($0.72 remaining)
+[ok] infra — 1 learning extracted ($0.02)
+[--] docs — no new commits
+[--] scripts — no new commits
+
+Summary: 6 learnings saved, $0.12 spent, balance: $0.70
+```
+
+#### 10. Quick Recovery When Credits Are Restored
+
+**Current:** After adding credits, the `.credits_exhausted` flag persists until the next successful inference call. But if the LaunchAgent daemon isn't scheduled to run soon, mining stays paused.
+
+**Fix:**
+- After `forgemem billing --add` confirms payment, auto-clear the credits flag
+- Optionally trigger an immediate mining run: `forgemem mine --now`
+- Or: on next `forgemem status`, if balance > 0 but flag exists, clear it and say "Credits restored — mining will resume on next scheduled run"
+
+---
+
+### Recommended Implementation Order
+
+| Priority | Fix | Effort | Impact |
+|----------|-----|--------|--------|
+| **P0** | Fix billing pack ID mismatch (bug) | 30 min | Critical — checkout is broken |
+| **P0** | Stop mining run on credit exhaustion (not silent skip) | 1 hour | High — users don't know mining stopped |
+| **P0** | Low-balance warning at $1.00 threshold | 1 hour | High — prevents surprise failures |
+| **P1** | `forgemem billing` command (open browser with pre-auth URL) | 2 hours | High — Cline/OpenRouter pattern |
+| **P1** | `forgemem billing --add N` (Stripe checkout from CLI) | 3 hours | High — fastest path to revenue |
+| **P1** | Provider switch warnings (lose sync, need auth) | 1 hour | Medium — prevents confusion |
+| **P1** | Retry logic for transient errors (2 attempts) | 2 hours | Medium — prevents data loss |
+| **P2** | Welcome back vs new user messaging after auth | 1 hour | Low — polish |
+| **P2** | `forgemem usage` command with cost breakdown | 3 hours | Medium — OpenRouter pattern |
+| **P2** | Usage dashboard in webapp (burn rate, per-project) | 1 day | Medium — retention feature |
+| **P2** | Mining cost estimate before run | 2 hours | Low — transparency |
+| **P3** | Auto-clear credits flag after payment confirmed | 1 hour | Low — recovery polish |
+| **P3** | `forgemem init` returning user detection | 1 hour | Low — onboarding polish |

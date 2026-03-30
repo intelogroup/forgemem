@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Forgemem — Add Credits</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 60px auto; padding: 0 20px; color: #1a1a1a; }
+    h1 { font-size: 1.4rem; margin-bottom: 8px; }
+    p  { color: #555; margin-bottom: 24px; }
+    .btn { display: inline-block; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-right: 12px; }
+    .btn-primary { background: #16a34a; color: #fff; }
+  </style>
+</head>
+<body>
+  <h1>Add a payment method</h1>
+  <p>Add a card to keep using Forgemem after your free credits run out.</p>
+
+  <a class="btn btn-primary"
+     href="/billing/cli-callback?type=card_added&cli_callback={{ cli_callback_encoded }}&state={{ state }}&amount=0">
+    Add card
+  </a>
+
+  <a class="btn btn-primary" style="margin-top:12px;display:block;width:fit-content"
+     href="/billing/cli-callback?type=credits_added&cli_callback={{ cli_callback_encoded }}&state={{ state }}&amount=5.0">
+    Add $5 credits
+  </a>
+
+  <p style="margin-top:32px;font-size:0.8rem;color:#aaa">
+    Close this tab to skip — add credits later with <code>forgemem auth credits</code>.
+  </p>
+</body>
+</html>

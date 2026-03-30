@@ -1692,3 +1692,239 @@ Summary: 6 learnings saved, $0.12 spent, balance: $0.70
 | **P2** | Mining cost estimate before run | 2 hours | Low — transparency |
 | **P3** | Auto-clear credits flag after payment confirmed | 1 hour | Low — recovery polish |
 | **P3** | `forgemem init` returning user detection | 1 hour | Low — onboarding polish |
+
+---
+
+## Strategic Product Expansion: Beyond ForgeMem
+
+### The Next CLI Tool — 5 Candidates Evaluated
+
+If the team were to build a second CLI tool with a stronger long-term moat than memory alone, these are the top 5 candidates ranked by moat durability and market demand (2026-2031):
+
+#### 1. Agent Billing Gateway — `forge bill`
+
+**Problem:** Every AI agent (Claude Code, Cursor, Copilot, Codex, OpenClaw) burns tokens with zero cost visibility. Developers get surprise $200+ bills. Teams have no budgets per-developer, per-project, or per-agent.
+
+**Moat:** Data lock-in (6 months of spend history is irreplaceable), team-level network effect, cross-vendor neutrality (Anthropic won't track OpenAI spend and vice versa). Revenue: free solo / $10-15/seat teams.
+
+#### 2. Agent Sandbox / Permissions Firewall — `forge guard`
+
+**Problem:** AI agents have exec() access to machines with zero standardized permission model. One hallucinated `rm -rf` from disaster.
+
+**Moat:** Compliance lock-in (enterprise audit trails + policy files in every repo), regulatory tailwind (EU AI Act), trust accumulation. Revenue: $20/seat enterprise.
+
+> **Update (March 2026):** NVIDIA NemoClaw now covers sandboxing with kernel-level OpenShell isolation. See "NemoClaw Assessment" below — this changes the calculus significantly.
+
+#### 3. Cross-Agent Workflow Orchestrator — `forge flow`
+
+**Problem:** Real dev tasks need multiple agents but there's no way to orchestrate them. "Claude writes feature, Codex writes tests, deploy" is 100% manual.
+
+**Moat:** Workflow lock-in (like Terraform/GitHub Actions), cross-vendor, proprietary execution data trains routing models. Revenue: per-execution + seat.
+
+#### 4. Code Provenance & AI Attribution Tracker — `forge trace`
+
+**Problem:** Nobody knows which code is human vs AI-generated, which model wrote it, or if it was reviewed. Legal/IP time bomb.
+
+**Moat:** Metadata can't be recreated retroactively, regulatory moat (EU AI Act transparency requirements), enterprise legal buyers with real budgets. Revenue: enterprise contracts.
+
+#### 5. Local AI Dev Environment Manager — `forge env`
+
+**Problem:** Running local models is dependency hell — no `package.json` for AI models. Need embeddings + chat + code models simultaneously with GPU memory management.
+
+**Moat:** Environment definition file ownership (like Dockerfile), cloud fallback revenue. Revenue: cloud compute margin.
+
+| Tool | Moat Type | Revenue Model | Time to MVP | 5-Year Durability |
+|------|-----------|---------------|-------------|-------------------|
+| **Agent Billing** | Data + team lock-in | $10/seat/mo | 4 weeks | ★★★★☆ |
+| **Agent Sandbox** | Compliance + regulation | $20/seat/mo | 6 weeks | ★★★★★ |
+| **Workflow Orchestrator** | Workflow lock-in + data flywheel | Per-execution + seat | 8 weeks | ★★★★☆ |
+| **Code Provenance** | Metadata + legal/regulatory | Enterprise contracts | 6 weeks | ★★★★★ |
+| **AI Env Manager** | Environment definition + cloud fallback | Cloud compute margin | 5 weeks | ★★★☆☆ |
+
+---
+
+## OpenClaw Ecosystem Assessment
+
+### What Is OpenClaw?
+
+[OpenClaw](https://github.com/openclaw/openclaw) (formerly Clawdbot/Moltbot) is a free, MIT-licensed autonomous AI agent created by Peter Steinberger (PSPDFKit founder). Launched Nov 2025, it became the **fastest-growing open-source project in history** — surpassing React to become the most-starred GitHub project (341K+ stars) by March 2026.
+
+- **2 million active users**
+- **13,729 skills** on [ClawHub](https://clawhub.com) marketplace
+- **172 startups** building in the ecosystem (~$361K/month combined revenue)
+- **TypeScript/Node.js** stack, MCP-native, runs on any hardware
+
+OpenClaw is a **messaging-first agent runtime** — it connects LLMs to real-world actions via WhatsApp, Telegram, Slack, Discord, etc. It is NOT a coding agent like Claude Code — it's a general-purpose autonomous assistant.
+
+### OpenClaw's Critical Gaps (March 2026)
+
+| Gap | Severity | Evidence |
+|-----|----------|----------|
+| **Security crisis** | 🔴 Critical | 341 malicious skills on ClawHub, 7.1% leak API keys, 820+ reported malicious skills total, 135K+ exposed instances, CVE-2026-25253 (WebSocket RCE) |
+| **No cost management** | 🟠 High | Power users spend $200-3,600/month on LLM APIs with zero visibility. No budget caps, no spend alerts, no team billing |
+| **Lossy memory** | 🟠 High | File-based memory compresses/rewrites/drops over time. No semantic search, no structured storage, no cross-session persistence |
+| **Setup complexity** | 🟡 Medium | Creator says "not meant for non-technical users." 2-5 days for enterprise setup |
+| **No enterprise governance** | 🟡 Medium | No per-skill sandboxing, no capability scoping, no read/write access distinctions |
+
+### The ClawHavoc Incident (February 2026)
+
+The "ClawHavoc" supply chain attack exposed how dangerous an unregulated agent ecosystem can become. Attackers uploaded 341 malicious skills disguised as legitimate tools to steal API keys and plaintext credentials. Because OpenClaw agents run with high system permissions and limited sandboxing, one malicious skill could exfiltrate everything on the host.
+
+---
+
+## NVIDIA NemoClaw Assessment
+
+### What NemoClaw Is
+
+[NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw) is an open-source (Apache 2.0) enterprise security wrapper for OpenClaw, announced at GTC on March 16, 2026. It is **not** a competitor to OpenClaw — it's an enterprise distribution that adds security controls.
+
+**Key capabilities:**
+- **OpenShell Runtime:** Kernel-level sandboxing (not container-level) — every file access, network request, and inference call governed by declarative YAML policy
+- **Privacy Router:** Routes sensitive data to local Nemotron models, only sends to cloud providers when policy allows
+- **Zero-permission default:** Agents start with no permissions; everything must be explicitly allowed
+- **Multi-agent orchestration:** Supervisor + worker agent patterns
+- **Built-in audit logs:** Enterprise compliance features included
+- **Hardware-agnostic:** Runs on any hardware (though NVIDIA GPUs get best performance)
+- **Industry partnerships:** Cisco, CrowdStrike, Google, Microsoft Security integrating with OpenShell
+
+**Current status:** Alpha preview. Not production-ready. APIs may change without notice.
+
+### What NemoClaw Does NOT Cover
+
+| Gap | Detail |
+|-----|--------|
+| **Cost tracking / billing** | Zero token counting, budget caps, spend alerts, or team billing. The privacy router routes inference but doesn't meter it. |
+| **Skill/supply chain scanning** | Sandboxes execution AFTER install but doesn't scan ClawHub skills BEFORE install. Credentials exposed during install/config phase are already leaked. |
+| **Persistent memory** | Adds zero memory capabilities. OpenClaw's lossy file-based memory remains unchanged under NemoClaw. |
+| **Cross-agent support** | OpenClaw-only. Does not work with Claude Code, Codex, Cursor, or Copilot. |
+| **Published benchmarks** | No latency/throughput data for the OpenShell interception layer. Enterprises can't evaluate against SLAs. |
+| **Resource overhead** | 2.4GB RAM at idle before first inference call. Memory consumption under load is 2x+ raw OpenClaw. |
+| **Skill marketplace** | No community skill marketplace — enterprises must build their own or wait. |
+
+### Impact on ForgeMem's Product Strategy
+
+**NemoClaw kills the security wrapper idea.** You cannot out-sandbox NVIDIA. They have kernel engineers, OpenShell, Jensen on stage at GTC, and Cisco/CrowdStrike/Google/Microsoft partnerships. Building another security wrapper for OpenClaw would be walking into NVIDIA's crosshairs.
+
+**But NemoClaw creates an even better opportunity** — be the intelligence layer that NemoClaw doesn't have and won't build.
+
+---
+
+## Revised Recommendation: `forgebill` — The Cost & Intelligence Layer
+
+### The Positioning
+
+```text
+NemoClaw = the armor   (sandbox, policy, isolation)
+forgebill = the brain   (cost intelligence, skill trust, memory)
+```
+
+Don't compete with the armor. Make the armor smarter.
+
+### What forgebill Does
+
+```text
+pip install forgebill
+
+# Works WITH NemoClaw, raw OpenClaw, Claude Code, Codex, Cursor
+forgebill wrap nemoclaw      # Intercepts NemoClaw's inference routing
+forgebill wrap openclaw      # Direct OpenClaw wrapping
+forgebill wrap claude-code   # Claude Code proxy
+forgebill status             # Unified spend dashboard across all agents
+```
+
+### Three Products, One CLI
+
+| Module | What It Does | NemoClaw Overlap? |
+|--------|-------------|-------------------|
+| **Cost Guardian** | Token tracking + budget caps + team spend limits across ALL agents and providers. Per-project, per-developer, per-agent breakdowns. Alerts before you hit zero. | ❌ NemoClaw has zero cost features |
+| **Skill Scanner** | Static + dynamic analysis of ClawHub skills for malware, leaked API keys, suspicious code patterns BEFORE install. Reputation database built from scanning all 13K+ skills. | ❌ NemoClaw only sandboxes AFTER install |
+| **ForgeMem Memory** | Persistent cross-agent memory with FTS5 search, LLM distillation, impact scoring. Replaces OpenClaw's lossy file memory. Works across Claude Code, Codex, Cursor too. | ❌ NemoClaw adds zero memory |
+
+### Why This Beats the Original forgeguard Idea
+
+1. **Complementary to NemoClaw, not competing.** "Use NemoClaw for sandboxing. Use forgebill for everything else." This is the Datadog play — don't build the OS, build the observability layer on top.
+
+2. **NVIDIA becomes a distribution channel, not a threat.** NemoClaw users need cost tracking. NVIDIA won't build it (they sell GPUs, not SaaS). forgebill becomes the natural companion tool.
+
+3. **Cross-agent moat survives.** NemoClaw is OpenClaw-only. forgebill works with Claude Code + Codex + Cursor + NemoClaw/OpenClaw. The Switzerland position no single vendor will build.
+
+4. **Lower engineering cost.** No kernel-level sandboxing needed (NemoClaw does it). Focus on the data layer: metering, scanning, memory. The team already has 80% of this in ForgeMem's existing codebase.
+
+5. **Skill scanning data compounds.** Every skill scanned, every malware signature detected, every false positive tuned builds a proprietary threat database. Day 1: scan 13K skills. Month 6: the only comprehensive skill reputation DB in the ecosystem. This data cannot be replicated without doing the same work.
+
+### Revenue Model
+
+```text
+Skill scanning:     Free (traction — like Ollama for ForgeMem)
+Cost tracking:      Free personal, $15/seat teams
+Persistent memory:  Free (Ollama) / Paid (forgebill provider) — exact ForgeMem model
+Enterprise bundle:  $25/seat (all features + SSO via WorkOS + compliance reports)
+```
+
+### Revenue Projection
+
+```text
+Phase 1 (Month 1-3): Free skill scanner + cost tracking
+  → Install base: 5K-10K users (from OpenClaw's 2M active users)
+  → Revenue: $0 (traction)
+
+Phase 2 (Month 3-6): Paid team features
+  → Convert 5% to $15/seat → 250-500 paying seats
+  → Revenue: $3,750 - $7,500/mo
+
+Phase 3 (Month 6-12): Enterprise + cross-agent
+  → 10 companies × $500/mo average
+  → Revenue: $5,000/mo + growing
+
+Phase 4 (Month 12+): NemoClaw partnership / integration listing
+  → TAM expands via NVIDIA's distribution
+```
+
+### How It Maps to the Team's Existing Stack
+
+| Team Asset | forgebill Use |
+|------------|---------------|
+| **ForgeMem memory engine** | Direct port — ForgeMem becomes forgebill's memory module. OpenClaw's memory is worse. Ship as a ClawHub skill. |
+| **MCP expertise** | OpenClaw is MCP-native. Same protocol, same tool definitions, same integration patterns the team already knows. |
+| **Inference pipeline** | Cost tracking requires intercepting LLM calls — already built for ForgeMem's managed provider in `inference.py`. |
+| **Oracle Cloud MySQL** | Skill reputation DB, cost analytics, team dashboards, enterprise audit storage. |
+| **WorkOS AuthKit** | Enterprise SSO for team billing. Already researched and recommended. |
+| **Stripe billing** | Already integrated in ForgeMem server. Reuse for forgebill seat licensing. |
+
+### Architecture Sketch
+
+```text
+┌─────────────────────────────────────────────────┐
+│                   forgebill CLI                  │
+│  ┌──────────┐  ┌──────────┐  ┌───────────────┐  │
+│  │   Cost   │  │   Skill  │  │   ForgeMem    │  │
+│  │ Guardian │  │ Scanner  │  │   Memory      │  │
+│  └────┬─────┘  └────┬─────┘  └──────┬────────┘  │
+│       │              │               │           │
+│  ┌────┴──────────────┴───────────────┴────────┐  │
+│  │         Inference Proxy / MCP Bridge        │  │
+│  └────┬──────────┬──────────┬────────┬────────┘  │
+│       │          │          │        │           │
+│  NemoClaw   OpenClaw   Claude    Codex/Cursor   │
+│  (sandboxed) (raw)     Code      (any agent)    │
+└─────────────────────────────────────────────────┘
+         │
+    Oracle Cloud MySQL
+    (skill reputation DB, cost analytics, team data)
+```
+
+### Competitive Landscape After NemoClaw
+
+| Player | What They Do | forgebill Threat? |
+|--------|-------------|-------------------|
+| **NemoClaw (NVIDIA)** | Sandbox + policy + privacy routing | Complementary, not competing |
+| **ClawNet (Silverfort)** | Static SKILL.md scanning only | forgebill's scanner would be deeper (static + dynamic + reputation DB) |
+| **IronClaw** | Hardened OpenClaw fork | Fork = fragmentation, doesn't help existing users |
+| **NanoClaw** | Lightweight container isolation | Container-level, weaker than NemoClaw's kernel-level |
+| **AICC One API** | Unified monitoring/billing gateway | Cloud-only, API-centric, not CLI-native or agent-aware |
+| **Nothing** for cross-agent cost tracking | — | Wide open |
+| **Nothing** for persistent agent memory | — | ForgeMem is already ahead |
+
+### Key Insight
+
+> NemoClaw validates that the OpenClaw ecosystem needs enterprise tooling. NVIDIA chose to solve security because that's their core competency (hardware isolation, kernel engineering). **Cost intelligence, skill trust, and persistent memory are NOT NVIDIA's competency.** That's the gap. That's where forgebill lives.

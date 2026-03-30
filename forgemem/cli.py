@@ -831,6 +831,19 @@ def config(
     console.print(msg)
 
 
+def _check_api_response(resp, console) -> None:
+    """Handle common API error codes before raise_for_status()."""
+    if resp.status_code == 401:
+        console.print("[yellow]Session expired.[/] Run: [bold]forgemem auth login[/]")
+        raise typer.Exit(1)
+    if resp.status_code == 402:
+        console.print(
+            "[yellow]Sync requires a Sync subscription.[/] "
+            "Upgrade at: https://app.forgemem.com/billing"
+        )
+        raise typer.Exit(1)
+
+
 def _do_auth_login() -> bool:
     """Run the browser-based OAuth login flow. Returns True on success, exits on failure."""
     import webbrowser
@@ -868,6 +881,7 @@ def _do_auth_login() -> bool:
 
     def _serve():
         server.handle_request()  # handle one request then stop
+        server.server_close()
 
     t = threading.Thread(target=_serve, daemon=True)
     t.start()
@@ -896,6 +910,103 @@ def _do_auth_login() -> bool:
     else:
         console.print("[red]Login timed out or was cancelled.[/]")
         raise typer.Exit(1)
+
+
+_POST_AUTH_TIMEOUT = 60  # seconds to wait for billing events
+
+
+def _do_post_auth_setup(jwt: str) -> list:
+    """After login: check balance, optionally open browser for billing setup.
+
+    Returns list of received event dicts. Returns [] if balance sufficient or timeout.
+    """
+    import webbrowser
+    import http.server
+    import threading
+    import secrets
+    import urllib.parse
+    import time
+    import requests as _req
+
+    _api_base = os.environ.get("FORGEMEM_API_URL", "https://api.forgemem.com")
+
+    try:
+        resp = _req.get(
+            f"{_api_base}/v1/balance",
+            headers={"Authorization": f"Bearer {jwt}"},
+            timeout=5,
+        )
+        if resp.status_code == 200 and resp.json().get("balance_usd", 0.0) > 2.0:
+            console.print(f"[dim]Balance: ${resp.json()['balance_usd']:.2f}[/]")
+            return []
+    except Exception:
+        pass
+
+    port = 47474
+    state = secrets.token_urlsafe(16)
+    received_events: list = []
+
+    class _EventHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            if params.get("state", [""])[0] == state:
+                event = {k: v[0] for k, v in params.items()}
+                received_events.append(event)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"<h2>Done! You can close this tab.</h2>")
+            else:
+                self.send_response(400)
+                self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    class _ReuseAddrServer(http.server.HTTPServer):
+        allow_reuse_address = True
+
+    try:
+        server = _ReuseAddrServer(("127.0.0.1", port), _EventHandler)
+    except OSError:
+        return []
+
+    server.timeout = 1.0
+
+    def _serve_events():
+        deadline = time.time() + _POST_AUTH_TIMEOUT
+        while time.time() < deadline and len(received_events) < 2:
+            server.handle_request()
+        server.server_close()
+
+    t = threading.Thread(target=_serve_events, daemon=True)
+    t.start()
+
+    billing_url = (
+        f"{_api_base}/billing/cli-setup"
+        f"?cli_callback={urllib.parse.quote(f'http://127.0.0.1:{port}/event', safe='')}"
+        f"&state={state}"
+        f"&token={urllib.parse.quote(jwt)}"
+    )
+    console.print("\n[bold]Add credits to keep using Forgemem.[/]")
+    console.print(f"Opening billing setup...\n{billing_url}")
+    webbrowser.open(billing_url)
+    console.print("[dim]Waiting for billing events (Ctrl+C to skip)...[/]")
+
+    t.join(timeout=_POST_AUTH_TIMEOUT + 5)
+
+    card_event    = next((e for e in received_events if e.get("type") == "card_added"), None)
+    credits_event = next((e for e in received_events if e.get("type") == "credits_added"), None)
+
+    if card_event:
+        console.print("[green]Payment method added![/]")
+    if credits_event:
+        amount = credits_event.get("amount", "?")
+        console.print(f"[green]${amount} credits added![/] You're ready to go.")
+    if not card_event and not credits_event:
+        console.print("[dim]Skipped. Run 'forgemem auth credits' later to add credits.[/]")
+
+    return received_events
 
 
 @app.command()
@@ -932,7 +1043,11 @@ def auth(
         return
 
     if action == "login":
-        _do_auth_login()
+        result = _do_auth_login()
+        if result:
+            from forgemem import config as fm_cfg
+            token = fm_cfg.load().get("forgemem_token", "")
+            _do_post_auth_setup(token)
         return
 
     console.print(f"[red]Unknown action '{action}'.[/] Use: login | logout | status")
@@ -1009,12 +1124,7 @@ def sync(
                     headers=headers,
                     timeout=30,
                 )
-                if resp.status_code == 402:
-                    console.print(
-                        "[yellow]Sync requires a Sync subscription.[/] "
-                        "Upgrade at: https://app.forgemem.com/billing"
-                    )
-                    raise typer.Exit(1)
+                _check_api_response(resp, console)
                 resp.raise_for_status()
                 data = resp.json()
                 console.print(
@@ -1036,12 +1146,7 @@ def sync(
                 headers=headers,
                 timeout=30,
             )
-            if resp.status_code == 402:
-                console.print(
-                    "[yellow]Sync requires a Sync subscription.[/] "
-                    "Upgrade at: https://app.forgemem.com/billing"
-                )
-                raise typer.Exit(1)
+            _check_api_response(resp, console)
             resp.raise_for_status()
             data = resp.json()
         except req.exceptions.ConnectionError:

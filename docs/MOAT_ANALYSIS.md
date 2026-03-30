@@ -96,17 +96,73 @@ The team wants to **white-label a cheap/small model** (e.g., a fine-tuned Llama,
 - **Quality bar:** How good does distillation need to be? If the cheap model extracts mediocre principles, it hurts trust in the whole system.
 - **White-label branding:** Does "ForgeMem Distill" feel like a product, or does it feel like a cost-cutting measure? Positioning matters.
 
+### 3. Oracle Cloud MySQL + Cross-Device Memory Sync
+
+**What exists today:**
+- Oracle Cloud account with MySQL cloud instance available
+- Server (`server/db.py`) already supports dual backend: SQLite locally, OCI MySQL via `DATABASE_URL` env var (pymysql)
+- Sync tables exist: `sync_traces`, `sync_principles`, `devices`
+- Push/pull endpoints work: users can sync memories across machines
+
+**Why this matters for moat:**
+- Cross-device memory is a **real differentiator** — no competing tool offers "your agent remembers what you did on your work laptop when you switch to your personal machine"
+- Oracle Cloud MySQL is cheap/free-tier friendly, keeping infra costs low
+- Centralizing memory in the cloud is a prerequisite for the scheduled inference idea (item #1 above)
+
+**Current status:** Infra is ready, sync API works, but adoption depends on the auth story (see below).
+
+### 4. Auth Gap: No GitHub / Google OAuth in the Next.js Webapp
+
+**What exists today:**
+- Custom magic link auth only (email → Resend/Mailpit → JWT)
+- CLI auth works via local loopback server (`127.0.0.1:47474/callback`)
+- Webapp auth works via `fm_token` cookie (30-day JWT, HS256)
+- No NextAuth / Auth.js — everything is hand-rolled in `server/auth.py`
+
+**The problem:**
+When a user picks "forgemem" as their managed provider during `forgemem init`, they're redirected to the webapp to authenticate. Today the only option is magic link email. This is **high friction for developer users** who expect "Sign in with GitHub" or "Sign in with Google" — one click, no email checking, no token expiry confusion.
+
+**What's needed:**
+- **GitHub OAuth** — natural fit for developer tool, ties identity to their repos
+- **Google OAuth** — covers non-GitHub users, enterprise Google Workspace accounts
+- **Keep magic link** as fallback for users without GitHub/Google
+
+**Implementation options:**
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **NextAuth.js (Auth.js v5)** | Battle-tested, built-in GitHub + Google providers, session management, JWT/DB adapters | Replaces existing hand-rolled auth; migration effort |
+| **Add OAuth to existing system** | Keep current JWT flow, just add GitHub/Google as token sources in `server/auth.py` | More custom code to maintain, security surface area |
+| **Clerk / Auth0 / Supabase Auth** | Zero auth code, hosted UI, SOC2 | Vendor lock-in, monthly cost, less control |
+
+**Open questions:**
+- Migrate to NextAuth.js or bolt OAuth onto the existing custom auth? NextAuth is cleaner but means reworking `server/auth.py` + `webapp/middleware.ts`
+- Does the CLI loopback flow (`127.0.0.1:47474/callback`) need to change for OAuth? Currently it expects a JWT back — OAuth would add a code-exchange step
+- Should GitHub OAuth also pull repo list for auto-mining scope? (Nice UX but bigger scope)
+- Google Workspace support — does this open a path to team/org-level accounts?
+
 ---
 
 ## Verdict
 
 ForgeMem solves a real problem at the right time, but has almost no structural moat today. The defensibility comes entirely from execution speed and user-accumulated data, both of which are fragile.
 
-The two ideas above — **cloud-scheduled inference** and **white-label distillation model** — are the most promising moat-building moves. Together they would:
+The four items above form a **connected stack** that, built together, would create a real moat:
 
-- Remove API key friction (white-label model)
-- Create always-on value (scheduled cloud inference)
-- Build a proprietary layer competitors can't trivially copy (fine-tuned distillation)
-- Justify SaaS pricing (cloud = premium, local = free tier)
+```
+┌─────────────────────────────────────────────────┐
+│  4. GitHub/Google OAuth (unblocks adoption)      │
+│     ↓                                            │
+│  3. Oracle MySQL cross-device sync (stickiness)  │
+│     ↓                                            │
+│  1. Cloud-scheduled inference (always-on value)  │
+│     ↓                                            │
+│  2. White-label distillation model (proprietary) │
+└─────────────────────────────────────────────────┘
+```
 
-**Priority recommendation:** Ship the white-label local model first (removes friction, increases adoption), then layer cloud scheduling on top (converts free users to paid).
+**Priority recommendation:**
+1. **OAuth first** — it's the blocker. Users won't sign up for managed service with email-only magic link. Add GitHub + Google OAuth to the Next.js webapp.
+2. **Cross-device sync** — already built, but useless without frictionless auth. Once OAuth ships, promote sync as a killer feature.
+3. **Cloud-scheduled inference** — with auth + sync in place, this becomes the paid tier differentiator.
+4. **White-label model** — longer-term proprietary moat. Ship after the cloud layer is generating revenue.

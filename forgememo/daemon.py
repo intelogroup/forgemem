@@ -174,12 +174,57 @@ def create_app() -> Flask:
                     seq=int(data["seq"]),
                 )
                 conn.commit()
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower():
+                    return jsonify({"error": "db_locked", "message": str(e)}), 503
+                raise
             finally:
                 conn.close()
 
         if event_id is None:
             return jsonify({"status": "duplicate"}), 200
         return jsonify({"status": "ok", "event_id": event_id}), 201
+
+    @app.route("/events/batch", methods=["POST"])
+    def post_events_batch():
+        """Accept a list of events and write them in a single transaction."""
+        items = request.get_json(silent=True)
+        if not isinstance(items, list):
+            return jsonify({"error": "expected_array"}), 400
+
+        results = []
+        with _write_lock:
+            conn = get_conn()
+            try:
+                for data in items:
+                    required = ["session_id", "project_id", "source_tool", "event_type", "payload", "seq"]
+                    missing = [k for k in required if k not in data or data[k] in (None, "")]
+                    if missing:
+                        results.append({"error": "missing_fields", "fields": missing})
+                        continue
+                    payload = data["payload"]
+                    if isinstance(payload, dict):
+                        payload = json.dumps(payload)
+                    event_id = _insert_event(
+                        conn,
+                        session_id=str(data["session_id"]),
+                        project_id=str(data["project_id"]),
+                        source_tool=str(data["source_tool"]),
+                        event_type=str(data["event_type"]),
+                        tool_name=data.get("tool_name"),
+                        payload=payload,
+                        seq=int(data["seq"]),
+                    )
+                    results.append({"status": "duplicate" if event_id is None else "ok", "event_id": event_id})
+                conn.commit()
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower():
+                    return jsonify({"error": "db_locked", "message": str(e)}), 503
+                raise
+            finally:
+                conn.close()
+
+        return jsonify({"results": results}), 207
 
     @app.route("/search")
     def search():

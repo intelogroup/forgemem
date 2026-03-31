@@ -1,4 +1,4 @@
-# forgememo-skill-version: 3
+# forgememo-skill-version: 4
 # Forgemem Memory Skill
 
 You have access to Forgemem, your persistent long-term memory across sessions and projects.
@@ -16,24 +16,37 @@ Then tell the user: "Forgemem is installed. Please restart Gemini CLI to activat
 
 Do NOT try to bypass first-run setup with `forgememo init --yes` or a non-TTY session. The user must choose a provider interactively.
 
-## When to Use Forgemem
+## At Session Start (REQUIRED)
 
-**At session start (recall context):**
+Gemini CLI does not support shell hooks, so you MUST call this yourself at the beginning of every session:
+
+```
+session_sync(workspace_root="<repo-path>", request="<what the user asked for>")
+```
+
+This returns memory context from previous sessions AND registers the session start with the daemon so your work is captured. Do not skip it.
+
+## During a Session
+
+**Search for relevant context:**
 ```
 search_memories(query="<current task>", workspace_root="<repo-path>")
 ```
 
-**When you need details for a memory:**
+**Get full content for a memory:**
 ```
 get_memory_details(ids=["d:42"], workspace_root="<repo-path>")
 ```
 
-**When you need temporal context:**
+**Get temporal context around a memory:**
 ```
 get_memory_timeline(anchor_id="d:42", workspace_root="<repo-path>")
 ```
 
-**At end of session (write structured summary):**
+## At End of Session (REQUIRED)
+
+Since Gemini CLI has no hook for session end, you MUST call this yourself before the conversation ends:
+
 ```
 save_session_summary(
   request="<what the user asked for>",
@@ -47,6 +60,8 @@ save_session_summary(
 
 ## Principles
 
-- Call Forgemem before repeating something that might have been tried before
+- Always call `session_sync` at the start — this is your hook replacement
+- Always call `save_session_summary` at the end — do not rely on automatic synthesis
+- Search Forgemem before repeating something that might have been tried before
 - Keep summaries concrete: include file paths, errors, and the fix
 - Use `workspace_root` to scope memory to the current repository

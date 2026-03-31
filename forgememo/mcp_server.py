@@ -11,6 +11,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 
 try:
@@ -95,6 +97,76 @@ def _daemon_post(path: str, payload: dict) -> dict:
     if not resp.ok:
         raise RuntimeError(f"daemon error {resp.status_code}: {resp.text[:200]}")
     return resp.json()
+
+
+def _post_event_bg(event_type: str, tool_name: str | None, payload: dict, project_id: str, session_id: str = "mcp") -> None:
+    """Fire-and-forget: post a tool-use event to the daemon in a background thread."""
+    body = {
+        "session_id": session_id,
+        "project_id": project_id,
+        "source_tool": "mcp",
+        "event_type": event_type,
+        "tool_name": tool_name,
+        "payload": json.dumps(payload),
+        "seq": int(time.time() * 1000),
+    }
+
+    def _send():
+        try:
+            _daemon_post("/events", body)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_send, daemon=True)
+    t.start()
+
+
+@mcp.tool()
+def session_sync(
+    workspace_root: str,
+    session_id: str = None,
+    request: str = None,
+) -> str:
+    """Call once at session start. Returns memory context from previous sessions and
+    registers a SessionStart event with the daemon.
+
+    Use this instead of hook-based lifecycle events when your agent (Gemini, Windows,
+    any tool that does not support shell hooks) cannot fire forgememo hooks automatically.
+    At session end, call save_session_summary() to persist what you learned."""
+    project_id = _resolve_project_id(workspace_root)
+    sid = session_id or "mcp-session"
+
+    # Register session start so the distillation pipeline knows a session is active.
+    _post_event_bg(
+        event_type="SessionStart",
+        tool_name=None,
+        payload={"cwd": workspace_root, "request": request or ""},
+        project_id=project_id,
+        session_id=sid,
+    )
+
+    # Fetch recent context — same logic as hook.py _handle_session_recall.
+    try:
+        summaries = _daemon_get("/session_summaries", {"project_id": project_id, "k": 2})
+    except Exception:
+        summaries = {}
+    try:
+        search = _daemon_get("/search", {"q": "recent", "project_id": project_id, "k": 5})
+    except Exception:
+        search = {}
+
+    parts: list[str] = []
+    for s in summaries.get("results", []):
+        ts = (s.get("ts") or "")[:10]
+        parts.append(f"[Session {ts}] {s.get('request', '')} — {s.get('learnings', '')}")
+    for r in search.get("results", []):
+        narrative = (r.get("narrative") or "")[:120]
+        parts.append(f"[Memory] {r.get('title', '')}: {narrative}")
+
+    if not parts:
+        return "No previous memory context found."
+
+    return "Forgememo context from previous sessions:\n" + "\n".join(parts)
 
 
 @mcp.tool()

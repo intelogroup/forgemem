@@ -228,6 +228,65 @@ def _register_mcp(settings_path: Path) -> bool:
     return False
 
 
+def _register_hooks(settings_path: Path) -> bool:
+    """Idempotently add UserPromptSubmit + Stop hooks to ~/.claude/settings.json."""
+    data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    hooks = data.setdefault("hooks", {})
+    changed = False
+    for event in ("UserPromptSubmit", "Stop"):
+        existing = hooks.get(event, [])
+        already = any(
+            h.get("hooks", [{}])[0].get("command", "").startswith("forgememo hook")
+            for h in existing
+        )
+        if not already:
+            hooks.setdefault(event, []).append(
+                {"hooks": [{"type": "command", "command": f"forgememo hook {event}"}]}
+            )
+            changed = True
+    if changed:
+        try:
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_path.write_text(json.dumps(data, indent=2))
+        except PermissionError as exc:
+            console.print(f"[yellow]warning:[/] could not register hooks in {settings_path}: {exc}")
+            return False
+        return True
+    return False
+
+
+_CONTEXT_FILES = [
+    "CLAUDE.md",                          # Claude Code
+    "AGENTS.md",                          # Codex CLI / OpenAI agents
+    "GEMINI.md",                          # Gemini CLI
+    ".github/copilot-instructions.md",    # GitHub Copilot
+    ".opencode/instructions.md",          # OpenCode
+]
+
+
+def _write_project_context(project_dir: str, summary: dict) -> None:
+    """Update <forgememo-context> block in all known agent context files. Silent on error."""
+    from datetime import datetime, timezone
+    updated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    project_label = Path(project_dir).name
+    inner = _format_context_markdown(project_label, updated, [], summary)
+    block = f"<forgememo-context>\n{inner}\n</forgememo-context>"
+    for rel in _CONTEXT_FILES:
+        try:
+            ctx_file = Path(project_dir) / rel
+            if not ctx_file.exists():
+                continue
+            new_text = _replace_block(
+                ctx_file.read_text(),
+                "<forgememo-context>",
+                "</forgememo-context>",
+                block,
+            )
+            ctx_file.write_text(new_text)
+        except Exception:
+            pass
+
+
 def _generate_skill(agent: str, dry_run: bool = False) -> None:
     """Read template from forgememo/skills/{agent}.{ext} and write to SKILL_PATHS[agent]."""
     ext = "json" if agent == "codex" else "md"
@@ -457,6 +516,13 @@ def init(
         console.print(f"[green]MCP registered[/] in {settings_path}")
     else:
         console.print("[dim]MCP already registered[/]")
+
+    # Hook registration
+    hooks_registered = _register_hooks(settings_path)
+    if hooks_registered:
+        console.print(f"[green]Hooks registered[/] in {settings_path}")
+    else:
+        console.print("[dim]Hooks already registered[/]")
 
     # Skill auto-detect
     _auto_detect_and_generate_skills(yes)
@@ -1920,8 +1986,18 @@ def end_session(
     }
     try:
         _req.post(f"{url_base}/session_summaries", json=payload, timeout=10)
+        _write_project_context(cwd, payload)
     except Exception:
         pass
+
+
+@app.command(hidden=True)
+def hook(event_name: str = typer.Argument(...)):
+    """Fire a forgememo hook event (stdin JSON payload). Used by settings.json hooks."""
+    import sys as _sys
+    _sys.argv = ["forgememo.hook", event_name]
+    from forgememo.hook import main as _hook_main
+    raise typer.Exit(_hook_main())
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.2.10] — 2026-03-31
+
+- Ensure Claude Code hooks are idempotently registered via `forgememo init`, which now writes `forgememo hook UserPromptSubmit`/`Stop` into `~/.claude/settings.json` and exposes a hidden `forgememo hook` CLI entry so the hook payload can run without embedding hardcoded paths.
+- When `end_session` synthesizes a summary, the CLI updates the `<forgememo-context>` block in each agent context file (Claude, Codex, Gemini, Copilot, OpenCode) so long-lived prompts see the latest memory state.
+- The daemon now handles SQLite `database is locked` errors more gracefully, exposes `/events/batch`, and the MCP server adds a `session_sync` tool that registers `SessionStart` plus fetches recent context, letting lifecycle-aware agents (Gemini, Windows, etc.) opt into hooking even when shell hooks cannot run.
+- Storage connections now open with a 30s timeout, `PRAGMA synchronous=NORMAL`, and a 30s busy timeout to reduce lock contention during bursty writes.
+
 ## [0.2.4] — 2026-03-31
 
 - Fix: auto-init in `_main` callback called full `init()` which ran `_prompt_provider_setup` and raised `typer.Exit(1)` in non-TTY sessions, causing `forgememo status` to fail on first run even though the DB was created successfully; auto-init now calls only `init_db()` + `_register_mcp()` + `_auto_detect_and_generate_skills()` directly — no provider prompt

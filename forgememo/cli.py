@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Forgemem CLI — flat ruff-style commands."""
+"""Forgememo CLI — flat ruff-style commands."""
 
 from __future__ import annotations
 
@@ -137,6 +137,7 @@ def _main(
         console.print("[dim]First run detected — initializing forgememo...[/]")
         from forgememo.storage import init_db
         init_db()
+        console.print(f"[dim]DB initialized: {DB_PATH}[/]")
         _register_mcp(Path.home() / ".claude" / "settings.json")
         _auto_detect_and_generate_skills(yes=True)
     if ctx.invoked_subcommand not in {"mcp"}:
@@ -217,8 +218,12 @@ def _register_mcp(settings_path: Path) -> bool:
     servers = data.setdefault("mcpServers", {})
     if "forgememo" not in servers:
         servers["forgememo"] = {"command": "forgememo", "args": ["mcp"]}
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps(data, indent=2))
+        try:
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_path.write_text(json.dumps(data, indent=2))
+        except PermissionError as exc:
+            console.print(f"[yellow]warning:[/] could not register MCP in {settings_path}: {exc}")
+            return False
         return True
     return False
 
@@ -237,10 +242,13 @@ def _generate_skill(agent: str, dry_run: bool = False) -> None:
         console.print(f"  [yellow]warning:[/] skill template not found: {template}")
         return
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    content = template.read_text()
-    dest.write_text(content)
-    console.print(f"  [green]wrote[/] {dest}")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        content = template.read_text()
+        dest.write_text(content)
+        console.print(f"  [green]wrote[/] {dest}")
+    except PermissionError as exc:
+        console.print(f"  [yellow]warning:[/] could not write skill file {dest}: {exc}")
 
 
 def _auto_detect_and_generate_skills(yes: bool) -> None:
@@ -258,7 +266,7 @@ def _auto_detect_and_generate_skills(yes: bool) -> None:
     agents_str = ", ".join(detected)
     if not yes:
         proceed = typer.confirm(
-            f"Generate Forgemem skill files for detected agents ({agents_str})?",
+            f"Generate Forgememo skill files for detected agents ({agents_str})?",
             default=True,
         )
         if not proceed:
@@ -340,7 +348,7 @@ def _prompt_provider_setup(yes: bool) -> None:
                 expand=False,
             )
         )
-        raise typer.Exit(code=1)
+        return  # don't exit 1 — let init complete without a provider
 
     # Interactive menu
     import questionary  # lazy: only needed for the interactive provider picker
@@ -468,7 +476,7 @@ def init(
     if not provider_configured:
         console.print(
             Panel(
-                "[bold green]Forgemem initialized successfully![/]\n\n"
+                "[bold green]Forgememo initialized successfully![/]\n\n"
                 "[bold red]⚠  REQUIRED BEFORE USE — configure a provider now:[/]\n"
                 "  [cyan]forgememo config anthropic --key sk-ant-...[/]\n"
                 "  [cyan]forgememo config openai    --key sk-...[/]\n"
@@ -486,7 +494,7 @@ def init(
     else:
         console.print(
             Panel(
-                "[bold green]Forgemem initialized successfully![/]\n\n"
+                "[bold green]Forgememo initialized successfully![/]\n\n"
                 "[bold]Next steps:[/]\n"
             "  1. [cyan]forgememo start[/]          — launch the daemon + worker\n"
                 "  2. Restart Claude Code / your AI agent to pick up the MCP connection\n"
@@ -498,7 +506,7 @@ def init(
                 "  [cyan]forgememo distill[/]           — condense traces into lasting principles\n"
                 "  [cyan]forgememo config[/]            — set inference provider (anthropic/ollama/…)\n\n"
                 "Run [cyan]forgememo help[/] at any time to see this again.",
-                title="Forgemem Ready",
+                title="Forgememo Ready",
                 expand=False,
             )
         )
@@ -514,52 +522,78 @@ def _do_start(
     """Core start logic — install and load LaunchAgent(s). Called by start() and init()."""
     if sys.platform == "linux":
         forgememo_bin = shutil.which("forgememo") or "forgememo"
-        console.print(
-            "[bold]Linux detected.[/] To run forgememo as a systemd user service, create:"
+        systemd_dir = Path.home() / ".config" / "systemd" / "user"
+        systemd_dir.mkdir(parents=True, exist_ok=True)
+
+        daemon_unit = systemd_dir / "forgememo-daemon.service"
+        daemon_unit.write_text(
+            f"[Unit]\n"
+            f"Description=Forgememo Daemon\n"
+            f"After=default.target\n\n"
+            f"[Service]\n"
+            f"ExecStart={forgememo_bin} daemon\n"
+            f"Restart=on-failure\n\n"
+            f"[Install]\n"
+            f"WantedBy=default.target\n"
         )
-        console.print("\n  [dim]~/.config/systemd/user/forgememo-daemon.service[/]\n")
-        console.print(
-            f"[dim]  [Unit]\n"
-            f"  Description=Forgemem Daemon\n"
-            f"  After=default.target\n\n"
-            f"  [Service]\n"
-            f"  ExecStart={forgememo_bin} daemon\n"
-            f"  Restart=on-failure\n\n"
-            f"  [Install]\n"
-            f"  WantedBy=default.target[/]\n"
+
+        worker_unit = systemd_dir / "forgememo-worker.service"
+        worker_unit.write_text(
+            f"[Unit]\n"
+            f"Description=Forgememo Worker\n"
+            f"After=default.target\n\n"
+            f"[Service]\n"
+            f"ExecStart={forgememo_bin} worker\n"
+            f"Restart=on-failure\n\n"
+            f"[Install]\n"
+            f"WantedBy=default.target\n"
         )
-        console.print("\n  [dim]~/.config/systemd/user/forgememo-worker.service[/]\n")
-        console.print(
-            f"[dim]  [Unit]\n"
-            f"  Description=Forgemem Worker\n"
-            f"  After=default.target\n\n"
-            f"  [Service]\n"
-            f"  ExecStart={forgememo_bin} worker\n"
-            f"  Restart=on-failure\n\n"
-            f"  [Install]\n"
-            f"  WantedBy=default.target[/]\n"
+
+        console.print(f"[green]wrote[/] {daemon_unit}")
+        console.print(f"[green]wrote[/] {worker_unit}")
+
+        reload_r = subprocess.run(
+            ["systemctl", "--user", "daemon-reload"], check=False, capture_output=True, text=True
         )
-        console.print("Then enable them with:")
-        console.print("  [cyan]systemctl --user daemon-reload[/]")
-        console.print("  [cyan]systemctl --user enable --now forgememo-daemon[/]")
-        console.print("  [cyan]systemctl --user enable --now forgememo-worker[/]")
-        console.print("\nOr just run directly: [cyan]forgememo daemon[/]")
+        if reload_r.returncode != 0:
+            console.print(f"[yellow]systemctl daemon-reload failed:[/] {reload_r.stderr.strip()}")
+            console.print("Run manually: [cyan]systemctl --user daemon-reload && systemctl --user enable --now forgememo-daemon forgememo-worker[/]")
+            raise typer.Exit(1)
+
+        enable_r = subprocess.run(
+            ["systemctl", "--user", "enable", "--now", "forgememo-daemon", "forgememo-worker"],
+            check=False, capture_output=True, text=True,
+        )
+        if enable_r.returncode == 0:
+            console.print("[green]forgememo-daemon and forgememo-worker enabled and started.[/]")
+        else:
+            console.print(f"[yellow]systemctl enable --now failed:[/] {enable_r.stderr.strip()}")
+            console.print("Start manually: [cyan]forgememo daemon[/]")
+
         raise typer.Exit(0)
 
     if sys.platform == "win32":
         forgememo_bin = shutil.which("forgememo") or "forgememo"
-        console.print(
-            "[bold]Windows detected.[/] To run forgememo at login via Task Scheduler, run:"
+        http_port = os.environ.get("FORGEMEMO_HTTP_PORT", "5555")
+        task_cmd = f'cmd /c "set FORGEMEMO_HTTP_PORT={http_port} && {forgememo_bin} daemon"'
+        worker_cmd = f'cmd /c "set FORGEMEMO_HTTP_PORT={http_port} && {forgememo_bin} worker"'
+        for tn, tr in [("Forgememo Daemon", task_cmd), ("Forgememo Worker", worker_cmd)]:
+            r = subprocess.run(
+                ["schtasks", "/create", "/tn", tn, "/tr", tr, "/sc", "ONLOGON", "/f"],
+                capture_output=True, text=True, check=False,
+            )
+            if r.returncode == 0:
+                console.print(f"[green]Task Scheduler task created:[/] {tn}")
+            else:
+                console.print(f"[yellow]schtasks failed for '{tn}':[/] {r.stderr.strip()}")
+        env = os.environ.copy()
+        env["FORGEMEMO_HTTP_PORT"] = http_port
+        subprocess.Popen(
+            [forgememo_bin, "daemon"],
+            env=env,
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
         )
-        console.print(
-            f'\n  [cyan]schtasks /create /tn "Forgemem Daemon" /tr "{forgememo_bin} daemon" '
-            f"/sc ONLOGON /f[/]\n"
-        )
-        console.print(
-            f'\n  [cyan]schtasks /create /tn "Forgemem Worker" /tr "{forgememo_bin} worker" '
-            f"/sc ONLOGON /f[/]\n"
-        )
-        console.print("Or just run directly in a terminal: [cyan]forgememo daemon[/]")
+        console.print(f"[green]Daemon started[/] on http://127.0.0.1:{http_port}")
         raise typer.Exit(0)
 
     if sys.platform != "darwin":
@@ -724,6 +758,32 @@ def start(
 @app.command()
 def stop():
     """Unload the LaunchAgent and optionally remove the plist."""
+    if sys.platform == "linux":
+        _stop_r = subprocess.run(
+            ["systemctl", "--user", "stop", "forgememo-daemon", "forgememo-worker"],
+            check=False, capture_output=True, text=True,
+        )
+        _dis_r = subprocess.run(
+            ["systemctl", "--user", "disable", "forgememo-daemon", "forgememo-worker"],
+            check=False, capture_output=True, text=True,
+        )
+        if _stop_r.returncode == 0:
+            console.print("[green]forgememo-daemon and forgememo-worker stopped.[/]")
+        else:
+            console.print(f"[yellow]stop failed:[/] {_stop_r.stderr.strip()}")
+        if _dis_r.returncode == 0:
+            console.print("[green]services disabled.[/]")
+        systemd_dir = Path.home() / ".config" / "systemd" / "user"
+        remove = typer.confirm("Remove unit files?", default=False)
+        if remove:
+            for name in ("forgememo-daemon.service", "forgememo-worker.service"):
+                p = systemd_dir / name
+                if p.exists():
+                    p.unlink()
+                    console.print(f"[dim]removed[/] {p}")
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+        raise typer.Exit(0)
+
     if sys.platform != "darwin":
         console.print("[yellow]warning:[/] LaunchAgent is macOS only.")
         raise typer.Exit(0)
@@ -890,22 +950,65 @@ def status(
     )
     table.add_row("Skills", skills_str)
 
-    # LaunchAgent / daemon status
+    # Daemon / service status — check both install state and live socket
+    import tempfile as _tempfile
+    _socket_path = Path(os.environ.get("FORGEMEMO_SOCKET", os.path.join(_tempfile.gettempdir(), "forgememo.sock")))
+    _socket_alive = _socket_path.exists()
+
     if sys.platform == "darwin":
-        daemon_val = (
-            f"[green]{CHECK} plist installed[/]"
-            if PLIST_PATH.exists()
-            else f"[dim]{CROSS} not installed[/]  → run: [cyan]forgememo start[/]"
-        )
+        _plist_ok = PLIST_PATH.exists()
+        _worker_ok = WORKER_PLIST_PATH.exists()
+        if _plist_ok and _socket_alive:
+            daemon_val = f"[green]{CHECK} running[/]"
+        elif _plist_ok:
+            daemon_val = f"[yellow]{CHECK} plist installed, not running[/]"
+        elif _socket_alive:
+            daemon_val = f"[green]{CHECK} running (manual)[/]"
+        else:
+            daemon_val = f"[dim]{CROSS} not installed[/]  → run: [cyan]forgememo start[/]"
         worker_val = (
             f"[green]{CHECK} plist installed[/]"
-            if WORKER_PLIST_PATH.exists()
+            if _worker_ok
             else f"[dim]{CROSS} not installed[/]  → run: [cyan]forgememo start[/]"
         )
         table.add_row("Daemon", daemon_val)
         table.add_row("Worker", worker_val)
+    elif sys.platform == "linux":
+        _sd = subprocess.run(
+            ["systemctl", "--user", "is-active", "forgememo-daemon"],
+            capture_output=True, text=True, check=False,
+        )
+        _sd_active = _sd.returncode == 0
+        if _sd_active or _socket_alive:
+            _label = "running" if _sd_active else "running (manual)"
+            daemon_val = f"[green]{CHECK} {_label}[/]"
+        else:
+            _sd_enabled = subprocess.run(
+                ["systemctl", "--user", "is-enabled", "forgememo-daemon"],
+                capture_output=True, text=True, check=False,
+            ).returncode == 0
+            if _sd_enabled:
+                daemon_val = f"[yellow]{CHECK} service installed, not running[/]"
+            else:
+                daemon_val = f"[dim]{CROSS} not installed[/]  → run: [cyan]forgememo start[/]"
+        table.add_row("Daemon", daemon_val)
+    elif sys.platform == "win32":
+        _http_port = os.environ.get("FORGEMEMO_HTTP_PORT", "5555")
+        import socket as _sock
+        try:
+            with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
+                _s.settimeout(1)
+                _win_alive = _s.connect_ex(("127.0.0.1", int(_http_port))) == 0
+        except Exception:
+            _win_alive = False
+        daemon_val = (
+            f"[green]{CHECK} running[/] on http://127.0.0.1:{_http_port}"
+            if _win_alive
+            else f"[dim]{CROSS} not running[/]  → run: [cyan]forgememo start[/]"
+        )
+        table.add_row("Daemon", daemon_val)
 
-    console.print(Panel(table, title="Forgemem Status", expand=False))
+    console.print(Panel(table, title="Forgememo Status", expand=False))
 
     # Ollama health (only shown when ollama is the active provider)
     if provider == "ollama":
@@ -1027,11 +1130,12 @@ def config(
       forgememo config ollama                             # use local Ollama (free, private)\n
       forgememo config ollama --model llama3.2            # use specific Ollama model\n
       forgememo config ollama --ollama-url http://host:11434  # remote Ollama\n
-      forgememo config forgememo                           # use Forgemem starter inference\n
+      forgememo config forgememo                           # use Forgememo managed inference\n
     """
     from forgememo import config as fm_cfg
 
-    if provider is None or show:
+    if provider is None or provider == "show" or show:
+        provider = None  # don't treat "show" as a provider name
         current = fm_cfg.load()
         active = current.get("provider", "anthropic")
         keys = current.get("api_keys", {})
@@ -1054,7 +1158,7 @@ def config(
         )
         if active == "ollama":
             tbl.add_row("Ollama URL", fm_cfg.get_ollama_url())
-        console.print(Panel(tbl, title="Forgemem Config", expand=False))
+        console.print(Panel(tbl, title="Forgememo Config", expand=False))
         return
 
     if provider not in fm_cfg.SUPPORTED_PROVIDERS:
@@ -1190,7 +1294,7 @@ def _do_auth_login() -> bool:
         cfg_data["provider"] = "forgememo"
         fm_cfg.save(cfg_data)
         fm_cfg.clear_credits_flag()
-        console.print("[green]Authenticated![/] Provider set to Forgemem Inference.")
+        console.print("[green]Authenticated![/] Provider set to Forgememo Inference.")
         console.print("[dim]Your $5 free credits are ready.[/]")
         return True
     else:
@@ -1277,7 +1381,7 @@ def _do_post_auth_setup(jwt: str) -> list:
         f"&state={state}"
         f"&token={urllib.parse.quote(jwt)}"
     )
-    console.print("\n[bold]Add credits to keep using Forgemem.[/]")
+    console.print("\n[bold]Add credits to keep using Forgememo.[/]")
     console.print(f"Opening billing setup...\n{billing_url}")
     webbrowser.open(billing_url)
     console.print("[dim]Waiting for billing events (Ctrl+C to skip)...[/]")
@@ -1308,7 +1412,7 @@ def _do_post_auth_setup(jwt: str) -> list:
 def auth(
     action: str = typer.Argument("status", help="login | logout | status"),
 ):
-    """Authenticate with Forgemem for managed inference.
+    """Authenticate with Forgememo for managed inference.
 
     Examples:\n
       forgememo auth login    # open browser, store token\n
@@ -1320,7 +1424,7 @@ def auth(
     if action == "status":
         token = fm_cfg.load().get("forgememo_token")
         if token:
-            console.print("[green]Authenticated[/] with Forgemem Inference")
+            console.print("[green]Authenticated[/] with Forgememo Inference")
             console.print(f"[dim]Token: {token[:8]}...{token[-4:]}[/]")
             console.print("Run [bold]forgememo config[/] to see full provider state.")
         else:
@@ -1359,7 +1463,7 @@ def sync(
         False, "--pull-only", help="Pull remote changes only"
     ),
 ):
-    """Sync local memory with Forgemem cloud (requires Sync subscription).
+    """Sync local memory with Forgememo cloud (requires Sync subscription).
 
     Pushes new local traces + principles to the cloud, then pulls changes
     from your other devices since the last sync. Safe to run repeatedly — all
@@ -1577,7 +1681,7 @@ def help():
     _D = "-"  # use plain hyphen — avoids UnicodeEncodeError on Windows cp1252/ascii consoles
     console.print(
         Panel(
-            "[bold]What is Forgemem?[/]\n"
+            "[bold]What is Forgememo?[/]\n"
             "Persistent cross-session memory for AI agents. Stores traces of your work,\n"
             "distills them into principles, and surfaces them via MCP so your AI remembers\n"
             "what you've built, decided, and learned - across every conversation.\n\n"
@@ -1598,7 +1702,7 @@ def help():
             f"  [cyan]forgememo skill generate[/]    {_D} regenerate agent skill files\n"
             f"  [cyan]forgememo stop[/]              {_D} stop the background server\n\n"
             f"[bold]Current state:[/]  DB {db_ok}   Provider: {provider}",
-            title="Forgemem - Help",
+            title="Forgememo - Help",
             expand=False,
         )
     )
@@ -1712,7 +1816,7 @@ def export_context(
         else:
             updated_text = block if not existing else existing + "\n" + block
         output.write_text(updated_text)
-        console.print(f"[green]{CHECK}[/] wrote {output}")
+        console.print(f"[green]{CHECK}[/] wrote {output.resolve()}")
     else:
         console.print(block)
 
@@ -1745,6 +1849,79 @@ def worker():
     from forgememo import worker as _worker
 
     _worker.main()
+
+
+@app.command(name="end-session", hidden=True)
+def end_session(
+    session_id: str = typer.Option("", "--session-id", help="Session ID from the Stop hook"),
+    project_dir: str = typer.Option("", "--project-dir", help="Working directory of the session"),
+):
+    """Synthesize and save a session summary (spawned by Stop/SessionEnd hook)."""
+    import requests as _req
+    from forgememo import inference
+
+    cwd = project_dir or os.getcwd()
+    project_id = os.path.realpath(cwd)
+    _daemon_url = os.environ.get("FORGEMEMO_DAEMON_URL")
+    _http_port = os.environ.get("FORGEMEMO_HTTP_PORT", "5555")
+    url_base = _daemon_url.rstrip("/") if _daemon_url else f"http://127.0.0.1:{_http_port}"
+
+    try:
+        resp = _req.get(
+            f"{url_base}/search",
+            params={"q": "recent", "project_id": project_id, "k": 10},
+            timeout=5,
+        )
+        raw = resp.json().get("results", {}) if resp.ok else {}
+        if isinstance(raw, dict):
+            results = raw.get("principles", []) + raw.get("traces", [])
+        else:
+            results = raw
+    except Exception:
+        return
+
+    if len(results) < 2:
+        return  # not enough data to warrant a summary
+
+    def _snippet(r: dict) -> str:
+        # principles have "principle" field; traces have "content"
+        text = r.get("narrative") or r.get("principle") or r.get("content") or ""
+        title = r.get("title") or r.get("type") or ""
+        return f"- [{r.get('type', '')}] {title}: {text[:200]}"
+
+    snippets = "\n".join(_snippet(r) for r in results)
+    prompt = (
+        "You are summarizing a coding session. Based on these observations:\n"
+        f"{snippets}\n\n"
+        "Return JSON only:\n"
+        '{\n'
+        '  "request": "1-line summary of the session goal",\n'
+        '  "investigation": "what was explored or investigated",\n'
+        '  "learnings": "key learnings and discoveries",\n'
+        '  "next_steps": "recommended next steps"\n'
+        '}'
+    )
+
+    try:
+        raw = inference.call(prompt, max_tokens=400)
+        data = json.loads(raw)
+    except Exception:
+        return
+
+    payload = {
+        "request": data.get("request") or "Session summary",
+        "project_id": project_id,
+        "source_tool": os.environ.get("FORGEMEMO_SOURCE_TOOL", "hook"),
+        "investigation": data.get("investigation"),
+        "learnings": data.get("learnings"),
+        "next_steps": data.get("next_steps"),
+        "concepts": [],
+        "session_id": session_id or None,
+    }
+    try:
+        _req.post(f"{url_base}/session_summaries", json=payload, timeout=10)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

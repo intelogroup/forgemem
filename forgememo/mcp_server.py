@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 
 try:
@@ -27,8 +28,8 @@ except ImportError:
 mcp = FastMCP("forgememo")
 
 DAEMON_URL = os.environ.get("FORGEMEMO_DAEMON_URL")
-SOCKET_PATH = os.environ.get("FORGEMEMO_SOCKET", "/tmp/forgememo.sock")
-HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT")
+SOCKET_PATH = os.environ.get("FORGEMEMO_SOCKET", os.path.join(tempfile.gettempdir(), "forgememo.sock"))
+HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT", "5555" if sys.platform == "win32" else None)
 
 
 def _socket_session():
@@ -61,7 +62,7 @@ def _resolve_project_id(workspace_root: str) -> str:
 
 
 def _daemon_get(path: str, params: dict | None = None) -> dict:
-    if not DAEMON_URL:
+    if not DAEMON_URL and sys.platform != "win32":
         session = _socket_session()
         if session:
             socket_url = "http+unix://" + SOCKET_PATH.replace("/", "%2F")
@@ -79,7 +80,7 @@ def _daemon_get(path: str, params: dict | None = None) -> dict:
 
 
 def _daemon_post(path: str, payload: dict) -> dict:
-    if not DAEMON_URL:
+    if not DAEMON_URL and sys.platform != "win32":
         session = _socket_session()
         if session:
             socket_url = "http+unix://" + SOCKET_PATH.replace("/", "%2F")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Forgemem Query MCP Tool — A standalone MCP tool that wraps forgemem queries.
+Forgememo Query MCP Tool — A standalone MCP tool that wraps forgememo queries.
 
 This tool exposes forgemem as an MCP service with additional query capabilities
 beyond the base mcp_server.py tools.
@@ -68,7 +68,7 @@ def search_principles(
     """
     conn = _conn()
     if not conn:
-        return "Forgemem DB not found"
+        return "Forgememo DB not found"
     
     k = min(k, 50)
     has_project = bool(project)
@@ -155,7 +155,7 @@ def search_traces(
     """
     conn = _conn()
     if not conn:
-        return "Forgemem DB not found"
+        return "Forgememo DB not found"
     
     k = min(k, 20)
     has_project = bool(project)
@@ -237,7 +237,7 @@ def list_top_principles(
     """
     conn = _conn()
     if not conn:
-        return "Forgemem DB not found"
+        return "Forgememo DB not found"
     
     limit = min(limit, 50)
     
@@ -289,7 +289,7 @@ def get_project_summary(project: str) -> str:
     """
     conn = _conn()
     if not conn:
-        return "Forgemem DB not found"
+        return "Forgememo DB not found"
     
     try:
         # Counts by type
@@ -350,11 +350,11 @@ def get_project_summary(project: str) -> str:
 @mcp.tool()
 def get_forgemem_status() -> str:
     """
-    Get overall Forgemem statistics and health.
+    Get overall Forgememo statistics and health.
     """
     conn = _conn()
     if not conn:
-        return "Forgemem DB not found at " + str(DB_PATH)
+        return "Forgememo DB not found at " + str(DB_PATH)
     
     try:
         total_traces = conn.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
@@ -371,7 +371,7 @@ def get_forgemem_status() -> str:
         
         conn.close()
         
-        md = "# Forgemem Status\n\n"
+        md = "# Forgememo Status\n\n"
         md += f"**Database:** {DB_PATH}\n"
         md += f"**Traces:** {total_traces} ({undistilled} undistilled)\n"
         md += f"**Principles:** {total_principles}\n\n"
@@ -399,7 +399,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     if args.http:
-        print(f"Forgemem Query Tool → http://{args.host}:{args.port}/sse", file=sys.stderr)
+        print(f"Forgememo Query Tool → http://{args.host}:{args.port}/sse", file=sys.stderr)
         mcp.run(transport="sse", host=args.host, port=args.port)
     else:
         mcp.run()

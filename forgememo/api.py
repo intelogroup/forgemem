@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Forgemem HTTP API Server — Flask wrapper for Forgemem SQLite store.
+Forgememo HTTP API Server — Flask wrapper for Forgememo SQLite store.
 Exposes REST endpoints for agents to query and save learnings.
 
 Features:

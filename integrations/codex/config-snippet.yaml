@@ -7,8 +7,15 @@
 # Ref: https://github.com/openai/codex — check current hook config schema
 # before applying; Codex hook config has changed across versions.
 
+# Note: session hooks require enabling in ~/.codex/config.toml:
+#   [features]
+#   codex_hooks = true
 shell_hooks:
+  user_prompt_submit:
+    command: "FORGEMEMO_SOURCE_TOOL=codex python -m forgememo.hook UserPromptSubmit"
   pre_tool_use:
     command: "FORGEMEMO_SOURCE_TOOL=codex python -m forgememo.hook PreToolUse"
   post_tool_use:
     command: "FORGEMEMO_SOURCE_TOOL=codex python -m forgememo.hook PostToolUse"
+  stop:
+    command: "FORGEMEMO_SOURCE_TOOL=codex python -m forgememo.hook Stop"

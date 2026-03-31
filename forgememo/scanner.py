@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Forgemem Daily Scanner — runs nightly via macOS LaunchAgent.
+Forgememo Daily Scanner — runs nightly via macOS LaunchAgent.
 
 Pass 1: Scans all git repos in ~/Developer for 24h commits → extracts learnings.
 Pass 2: Scans ~/.claude/projects/*/memory/*.md files for changes → extracts principles.
         Uses content hashes to skip unchanged files (no duplicate saves).
 
-Logs to ~/Developer/Forgemem/daily_scan.log
+Logs to ~/Developer/Forgememo/daily_scan.log
 """
 
 import argparse
@@ -39,7 +39,7 @@ HASH_FILE = FORGEMEM_DIR / "md_scan_hashes.json"
 PYTHON = sys.executable
 
 # Repos to skip (add any you don't want scanned)
-SKIP_DIRS = {"Forgemem", "node_modules", ".git"}
+SKIP_DIRS = {"Forgememo", "Forgemem", "node_modules", ".git"}
 
 # Max chars to send to Claude per file (keep costs low)
 MAX_LOG_CHARS = 3000
@@ -309,7 +309,7 @@ def save_to_forgemem(project: str, learning: dict):
 
 
 def main():
-    log("=== Forgemem Daily Scan ===")
+    log("=== Forgememo Daily Scan ===")
 
     provider = cfg.get_provider()
     if provider != "ollama" and not cfg.get_api_key(provider):
@@ -349,7 +349,7 @@ def main():
     # Pass 2: scan .md memory files for changed content
     total_saved += scan_memory_docs()
 
-    log(f"=== Done. Total saved: {total_saved} trace(s) to Forgemem ===\n")
+    log(f"=== Done. Total saved: {total_saved} trace(s) to Forgememo ===\n")
 
 
 # ── Pass 2: memory doc scanning ──────────────────────────────────────────────
@@ -435,7 +435,7 @@ def extract_md_learnings(project: str, filename: str, content: str) -> list[dict
 
 
 def scan_memory_docs() -> int:
-    """Pass 2: scan changed .md memory files and save learnings to Forgemem."""
+    """Pass 2: scan changed .md memory files and save learnings to Forgememo."""
     log("")
     log("=== Pass 2: Scanning .md memory files ===")
 

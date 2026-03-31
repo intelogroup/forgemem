@@ -21,6 +21,7 @@ import os
 import signal
 import sqlite3
 import sys
+import tempfile
 import threading
 from typing import Any
 
@@ -41,15 +42,15 @@ except Exception:
 
 _DEFAULT_LOG_PATH = os.path.join(Path.home(), ".forgememo", "logs", "forgememo_daemon.log")
 LOG_FILE = os.environ.get("FORGEMEMO_DAEMON_LOG", _DEFAULT_LOG_PATH)
-SOCKET_PATH = os.environ.get("FORGEMEMO_SOCKET", "/tmp/forgememo.sock")
-HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT")
+SOCKET_PATH = os.environ.get("FORGEMEMO_SOCKET", os.path.join(tempfile.gettempdir(), "forgememo.sock"))
+HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT", "5555" if sys.platform == "win32" else None)
 
 try:
     os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 except OSError:
     if os.environ.get("FORGEMEMO_ALLOW_TMP_LOG") == "1":
         # Fallback for restricted environments (e.g., test sandboxes)
-        LOG_FILE = "/tmp/forgememo_daemon.log"
+        LOG_FILE = os.path.join(tempfile.gettempdir(), "forgememo_daemon.log")
         os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
     else:
         raise
@@ -535,31 +536,41 @@ def main():
             logger.error("Werkzeug server unavailable. Install werkzeug (via flask) to run.")
             sys.exit(1)
 
-        # Socket-first server (default)
-        socket_host = f"unix://{SOCKET_PATH}"
-        logger.info(f"Starting UNIX socket server on {SOCKET_PATH}...")
-        socket_server = make_server(socket_host, 0, app, threaded=True)
-        try:
-            os.chmod(SOCKET_PATH, 0o600)
-        except Exception:
-            pass
-
-        # Optional HTTP server (opt-in)
-        http_server = None
-        if HTTP_PORT:
-            port = int(HTTP_PORT)
+        if sys.platform == "win32":
+            # Windows: HTTP-only (AF_UNIX not reliable on Windows)
+            port = int(HTTP_PORT)  # always set — defaults to "5555" above
             if _check_port("127.0.0.1", port):
-                logger.error(f"Port {port} already in use — HTTP server disabled.")
-            else:
-                logger.info(f"Starting HTTP server on 127.0.0.1:{port}...")
-                http_server = make_server("127.0.0.1", port, app, threaded=True)
-                threading.Thread(target=http_server.serve_forever, daemon=True).start()
+                logger.error(f"Port {port} already in use — cannot start.")
+                sys.exit(1)
+            logger.info(f"Starting HTTP server on 127.0.0.1:{port} (Windows mode)...")
+            http_server = make_server("127.0.0.1", port, app, threaded=True)
+            logger.info("Health check: curl http://127.0.0.1:%s/health", port)
+            http_server.serve_forever()
+        else:
+            # POSIX: UNIX socket primary, HTTP optional
+            socket_host = f"unix://{SOCKET_PATH}"
+            logger.info(f"Starting UNIX socket server on {SOCKET_PATH}...")
+            socket_server = make_server(socket_host, 0, app, threaded=True)
+            try:
+                os.chmod(SOCKET_PATH, 0o600)
+            except Exception:
+                pass
 
-        logger.info("Health check (socket): curl --unix-socket %s http://localhost/health", SOCKET_PATH)
-        if HTTP_PORT:
-            logger.info("Health check (http): curl http://127.0.0.1:%s/health", HTTP_PORT)
+            http_server = None
+            if HTTP_PORT:
+                port = int(HTTP_PORT)
+                if _check_port("127.0.0.1", port):
+                    logger.error(f"Port {port} already in use — HTTP server disabled.")
+                else:
+                    logger.info(f"Starting HTTP server on 127.0.0.1:{port}...")
+                    http_server = make_server("127.0.0.1", port, app, threaded=True)
+                    threading.Thread(target=http_server.serve_forever, daemon=True).start()
 
-        socket_server.serve_forever()
+            logger.info("Health check (socket): curl --unix-socket %s http://localhost/health", SOCKET_PATH)
+            if HTTP_PORT:
+                logger.info("Health check (http): curl http://127.0.0.1:%s/health", HTTP_PORT)
+
+            socket_server.serve_forever()
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)

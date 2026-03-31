@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forgememo"
-version = "0.2.4"
+version = "0.2.6"
 description = "Persistent memory for AI agents — cross-session context that actually sticks"
 authors = [{name = "Forgemem Contributors"}]
 license = "Apache-2.0"
@@ -28,7 +28,7 @@ dependencies = [
     "fastmcp>=2.0.0",
     "flask>=2.3.0",
     "requests>=2.31.0",
-    "requests-unixsocket>=0.3.0",
+    "requests-unixsocket>=0.3.0; sys_platform != 'win32'",
     "typer>=0.12.0",
     "rich>=13.0.0",
     "questionary>=2.0.0",

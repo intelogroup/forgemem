@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FORGEMEMO_SOURCE_TOOL=claude-code python -m forgememo.hook UserPromptSubmit"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "",
@@ -18,6 +29,18 @@
           {
             "type": "command",
             "command": "FORGEMEMO_SOURCE_TOOL=claude-code python -m forgememo.hook PostToolUse"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FORGEMEMO_SOURCE_TOOL=claude-code python -m forgememo.hook Stop",
+            "async": true
           }
         ]
       }

@@ -1,5 +1,5 @@
 """
-Forgemem inference abstraction.
+Forgememo inference abstraction.
 Routes LLM calls to the configured provider (BYOK or managed).
 """
 
@@ -21,10 +21,12 @@ def call(prompt: str, max_tokens: int = 300, model: str | None = None) -> str:
         return _call_gemini(prompt, max_tokens, model)
     elif provider == "ollama":
         return _call_ollama(prompt, max_tokens, model)
+    elif provider == "claude_code":
+        return _call_claude_code(prompt, max_tokens, model)
     elif provider == "forgememo":
         return _call_forgemem_managed(prompt, max_tokens, model)
     else:
-        print(f"ERROR: Unknown provider '{provider}'. Run: forgemem config provider anthropic", file=sys.stderr)
+        print(f"ERROR: Unknown provider '{provider}'. Run: forgememo config anthropic --key sk-ant-...", file=sys.stderr)
         sys.exit(1)
 
 
@@ -148,11 +150,37 @@ def _call_ollama(prompt: str, max_tokens: int, model: str) -> str:
     return resp.json().get("response", "").strip()
 
 
+def _call_claude_code(prompt: str, max_tokens: int, model: str) -> str:
+    """Call the local `claude` CLI in non-interactive mode (uses the user's Claude subscription)."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("claude"):
+        print(
+            "ERROR: 'claude' CLI not found.\n"
+            "  Install Claude Code: https://claude.ai/code\n"
+            "  Then log in: claude login",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    result = subprocess.run(
+        ["claude", "-p", prompt],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        err = result.stderr.strip() or f"claude CLI exited {result.returncode}"
+        raise ConnectionError(err)
+    return result.stdout.strip()
+
+
 MANAGED_API_URL = os.environ.get("FORGEMEM_API_URL", "https://api.forgememo.com") + "/v1/inference"
 
 
 def _call_forgemem_managed(prompt: str, max_tokens: int, model: str) -> str:
-    """Call Forgemem managed inference. Requires `forgemem auth login`."""
+    """Call Forgememo managed inference. Requires `forgememo auth login`."""
     try:
         import requests as req
     except ImportError:
@@ -162,7 +190,7 @@ def _call_forgemem_managed(prompt: str, max_tokens: int, model: str) -> str:
     token = cfg.load().get("forgemem_token")
     if not token:
         print(
-            "ERROR: Not authenticated with Forgemem.\n"
+            "ERROR: Not authenticated with Forgememo.\n"
             "  Run: forgemem auth login",
             file=sys.stderr,
         )
@@ -203,7 +231,7 @@ def _call_forgemem_managed(prompt: str, max_tokens: int, model: str) -> str:
                 [
                     "osascript", "-e",
                     'display notification "Scheduled memory runs paused — add credits to continue" '
-                    'with title "Forgemem" subtitle "Run: forgemem status"',
+                    'with title "Forgememo" subtitle "Run: forgememo status"',
                 ],
                 check=False,
                 capture_output=True,
@@ -213,7 +241,7 @@ def _call_forgemem_managed(prompt: str, max_tokens: int, model: str) -> str:
         print("ERROR: Rate limit hit. Wait a moment and retry.", file=sys.stderr)
         sys.exit(1)
     if not resp.ok:
-        print(f"ERROR: Forgemem API error {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+        print(f"ERROR: Forgememo API error {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
         sys.exit(1)
 
     # Auto-clear the credits flag on success — user topped up, runs resume.

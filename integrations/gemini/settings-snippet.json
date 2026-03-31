@@ -1,6 +1,22 @@
 {
   "hooks": {
+    "BeforeAgent": {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "FORGEMEMO_SOURCE_TOOL=gemini python -m forgememo.hook BeforeAgent"
+        }
+      ]
+    },
     "preToolUse": "FORGEMEMO_SOURCE_TOOL=gemini python -m forgememo.hook PreToolUse",
-    "postToolUse": "FORGEMEMO_SOURCE_TOOL=gemini python -m forgememo.hook PostToolUse"
+    "postToolUse": "FORGEMEMO_SOURCE_TOOL=gemini python -m forgememo.hook PostToolUse",
+    "SessionEnd": {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "FORGEMEMO_SOURCE_TOOL=gemini python -m forgememo.hook SessionEnd"
+        }
+      ]
+    }
   }
 }

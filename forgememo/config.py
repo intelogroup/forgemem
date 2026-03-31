@@ -1,6 +1,6 @@
 """
-Forgemem provider configuration.
-Stored at ~/.forgemem/config.json — never sent to Forgemem servers.
+Forgememo provider configuration.
+Stored at ~/.forgemem/config.json — never sent to Forgememo servers.
 """
 
 import datetime

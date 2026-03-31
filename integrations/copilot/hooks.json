@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "FORGEMEMO_SOURCE_TOOL=copilot python -m forgememo.hook sessionStart"
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "FORGEMEMO_SOURCE_TOOL=copilot python -m forgememo.hook PreToolUse"
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "FORGEMEMO_SOURCE_TOOL=copilot python -m forgememo.hook PostToolUse"
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "FORGEMEMO_SOURCE_TOOL=copilot python -m forgememo.hook agentStop"
+      }
+    ]
+  }
+}

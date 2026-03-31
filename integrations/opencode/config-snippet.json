@@ -3,5 +3,19 @@
   "hooks": {
     "tool:before": "FORGEMEMO_SOURCE_TOOL=opencode python -m forgememo.hook PreToolUse",
     "tool:after":  "FORGEMEMO_SOURCE_TOOL=opencode python -m forgememo.hook PostToolUse"
+  },
+  "experimental": {
+    "hooks": {
+      "session_start": [
+        {
+          "command": ["sh", "-c", "FORGEMEMO_SOURCE_TOOL=opencode python -m forgememo.hook session.created"]
+        }
+      ],
+      "session_end": [
+        {
+          "command": ["sh", "-c", "FORGEMEMO_SOURCE_TOOL=opencode python -m forgememo.hook session.idle"]
+        }
+      ]
+    }
   }
 }

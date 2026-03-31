@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Forgemem CLI — Long-term memory store for AI agents.
+Forgememo CLI — Long-term memory store for AI agents.
 SQLite + FTS5, append-only, zero external deps (distill requires anthropic).
 
 Usage:
@@ -21,7 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Load .env from Forgemem directory if python-dotenv is available
+# Load .env from Forgememo directory if python-dotenv is available
 try:
     from dotenv import load_dotenv
 
@@ -104,7 +104,7 @@ def cmd_init(args):
     conn.executescript(INIT_SQL)
     conn.commit()
     conn.close()
-    print(f"Forgemem DB initialized at {DB_PATH}")
+    print(f"Forgememo DB initialized at {DB_PATH}")
 
 
 def insert_principle(
@@ -267,7 +267,7 @@ def cmd_retrieve(args):
         return
 
     # Markdown output (default — clean for agent prompts)
-    lines = [f'# Forgemem: "{query}"']
+    lines = [f'# Forgememo: "{query}"']
     if args.project:
         lines.append(f"_project: {args.project}_")
     lines.append("")
@@ -357,7 +357,16 @@ def cmd_distill(args):
             count += 1
             print(f"  #{row['id']} [{row['type']}]: {principle[:80]}")
         except Exception as e:
-            print(f"  #{row['id']} FAILED: {e}", file=sys.stderr)
+            _msg = str(e).lower()
+            if any(kw in _msg for kw in ("connection", "network", "unreachable", "timeout", "refused")):
+                print(
+                    f"  #{row['id']} FAILED: network error — cannot reach the configured API.\n"
+                    f"  The trace is still undistilled and will retry on the next run.\n"
+                    f"  Check firewall/VPN access, or switch provider: forgememo config ollama",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"  #{row['id']} FAILED: {e}", file=sys.stderr)
 
     conn.close()
     print(f"Done. Distilled {count}/{len(rows)} traces.")
@@ -395,7 +404,7 @@ def cmd_stats(args):
 
     conn.close()
 
-    title = "Forgemem Stats" + (
+    title = "Forgememo Stats" + (
         f" — {args.project}" if args.project else " — all projects"
     )
     print(f"\n{title}")
@@ -499,7 +508,7 @@ def cmd_mine_memories(args):
 
 
 def cmd_capture(args):
-    """Capture raw content from stdin, a file, or git log into Forgemem."""
+    """Capture raw content from stdin, a file, or git log into Forgememo."""
     # Resolve content from source
     if args.git:
         limit = args.limit or 50
@@ -610,7 +619,7 @@ def cmd_export(args):
         print("No principles found.")
         return
 
-    lines = ["# Forgemem Principles Export"]
+    lines = ["# Forgememo Principles Export"]
     if args.project:
         lines.append(f"_project: {args.project}_")
     lines.append(f"_top {len(rows)} by impact score_\n")
@@ -626,7 +635,7 @@ def cmd_export(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Forgemem — AI agent long-term memory")
+    parser = argparse.ArgumentParser(description="Forgememo — AI agent long-term memory")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init", help="Initialize DB")

@@ -1,0 +1,6 @@
+{
+  "hooks": {
+    "preToolUse": "FORGEMEMO_SOURCE_TOOL=gemini python -m forgememo.hook PreToolUse",
+    "postToolUse": "FORGEMEMO_SOURCE_TOOL=gemini python -m forgememo.hook PostToolUse"
+  }
+}

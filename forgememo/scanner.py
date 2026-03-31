@@ -16,6 +16,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -196,18 +197,56 @@ def extract_learnings(project: str, git_log: str) -> list[dict]:
 
 
 def is_duplicate(content: str, project: str) -> bool:
-    """Check if a near-identical trace already exists in the DB."""
+    """Check if a near-identical learning already exists in the DB (v2 events or legacy traces)."""
     from forgememo.storage import get_conn
     conn = get_conn()
     try:
         fingerprint = content[:120].strip()
+        # Check v2 events (scanner_learning events store content in payload JSON)
+        try:
+            v2_row = conn.execute(
+                "SELECT id FROM events WHERE project_id=? AND event_type='scanner_learning' "
+                "AND substr(json_extract(payload,'$.content'),1,120)=?",
+                (project, fingerprint),
+            ).fetchone()
+            if v2_row:
+                return True
+        except Exception:
+            pass
+        # Check legacy traces
         row = conn.execute(
             "SELECT id FROM traces WHERE project_tag=? AND substr(content,1,120)=?",
-            (project, fingerprint)
+            (project, fingerprint),
         ).fetchone()
         return row is not None
     finally:
         conn.close()
+
+
+def _post_learning_to_daemon(project: str, learning: dict, session_id: str) -> bool:
+    """Post a learning to the daemon as a v2 event. Returns True on success."""
+    try:
+        from forgememo.hook import _post_event
+        event = {
+            "session_id": session_id,
+            "project_id": project,
+            "source_tool": "forgememo-scanner",
+            "event_type": "scanner_learning",
+            "tool_name": None,
+            "payload": json.dumps({
+                "content": learning.get("content", ""),
+                "_principle": learning.get("principle"),
+                "_impact_score": learning.get("impact_score", 5),
+                "_tags": learning.get("tags") or [],
+                "_type": learning.get("type", "note"),
+            }),
+            "seq": int(time.time() * 1000),
+        }
+        _post_event(event)
+        return True
+    except Exception as exc:
+        log(f"    Daemon post failed: {exc}")
+        return False
 
 
 def save_to_forgemem(project: str, learning: dict):
@@ -215,12 +254,17 @@ def save_to_forgemem(project: str, learning: dict):
     if is_duplicate(content, project):
         log(f"    skip duplicate: {content[:80]}...")
         return
+    session_id = f"daily-scan-{datetime.now().strftime('%Y-%m-%d')}"
+    if _post_learning_to_daemon(project, learning, session_id):
+        log(f"    Saved (v2): {content[:80]}")
+        return
+    # Fallback: legacy write path if daemon is not running
     tags_list = learning.get("tags")
     args = argparse.Namespace(
         type=learning.get("type", "note"),
         content=content,
         project=project,
-        session=f"daily-scan-{datetime.now().strftime('%Y-%m-%d')}",
+        session=session_id,
         score=learning.get("impact_score", 5),
         principle=learning.get("principle") or None,
         tags=",".join(tags_list) if tags_list else None,
@@ -228,7 +272,7 @@ def save_to_forgemem(project: str, learning: dict):
     )
     try:
         core.cmd_save(args)
-        log(f"    Saved: {content[:80]}")
+        log(f"    Saved (legacy fallback): {content[:80]}")
     except Exception as exc:
         log(f"    Save failed: {exc}")
 

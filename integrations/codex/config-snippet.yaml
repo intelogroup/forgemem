@@ -1,0 +1,14 @@
+# Codex CLI hook integration for Forgememo
+# Merge this into ~/.codex/config.yaml
+#
+# Codex passes tool use events as JSON to the shell command via stdin.
+# The FORGEMEMO_SOURCE_TOOL env var identifies the originating tool.
+#
+# Ref: https://github.com/openai/codex — check current hook config schema
+# before applying; Codex hook config has changed across versions.
+
+shell_hooks:
+  pre_tool_use:
+    command: "FORGEMEMO_SOURCE_TOOL=codex python -m forgememo.hook PreToolUse"
+  post_tool_use:
+    command: "FORGEMEMO_SOURCE_TOOL=codex python -m forgememo.hook PostToolUse"

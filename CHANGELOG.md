@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-03-31
+
+- Fix: daemon `/search` N+1 concept query replaced with a single `WHERE id IN (...)` batch fetch
+- Fix: scanner now writes learnings to daemon `/events` (v2) instead of legacy `core.cmd_save`; falls back to legacy path if daemon is not running
+- Fix: `is_duplicate` in scanner checks v2 events table (via `json_extract`) in addition to legacy traces
+- Fix: daemon log-path fallback catches `OSError` (covers read-only filesystem) not just `PermissionError`
+- Perf: worker processes up to 10 events per poll cycle; sleeps only when queue is empty
+- Perf: worker short-circuits inference for scanner events that carry a pre-extracted `_principle` — avoids a redundant API call
+- Add: `integrations/` with hook config snippets for Claude Code, Codex, OpenCode, Gemini and an interactive `setup.sh`
+
+## [0.2.0] — 2026-03-31
+
+- Add: v2 storage layer — `events`, `distilled_summaries`, `session_summaries` tables with FTS5; compat view preserves legacy `traces`/`principles` data
+- Add: daemon (`forgememo.daemon`) — single write path over UNIX socket (opt-in HTTP); routes `POST /events`, `/search`, `/timeline`, `/observation`, `/session_summaries`
+- Add: background worker (`forgememo.worker`) — distills raw events into structured summaries via inference
+- Add: hook adapter (`forgememo.hook`) — tool-agnostic event capture with `<private>` tag stripping
+- Add: `claude_code` provider — use Claude subscription via CLI, no API key required
+- Fix: `mcp_server.py` syntax error (import not indented inside try block)
+- Fix: `forgemem` → `forgememo` import names across inference, scanner, core
+- Fix: scanner and query_tool hardcoded wrong DB paths
+
 ## [0.1.12] — 2026-03-29
 
 - Feature: selecting forgemem as provider during `forgemem init` now immediately triggers browser OAuth login — no separate `forgemem auth login` step required

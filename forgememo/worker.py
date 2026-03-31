@@ -12,6 +12,7 @@ from forgememo import inference
 from forgememo.storage import get_conn
 
 MAX_DISTILL_ATTEMPTS = 3
+BATCH_SIZE = 10
 ALLOWED_CONCEPTS = {
     "security",
     "pattern",
@@ -85,6 +86,24 @@ class Worker:
 
     def distill_event(self, event: dict) -> dict:
         payload = event.get("payload", "")
+        # Short-circuit: scanner pre-extracts distillation data to avoid double API calls
+        try:
+            payload_data = json.loads(payload) if isinstance(payload, str) else payload
+        except Exception:
+            payload_data = {}
+        if isinstance(payload_data, dict) and payload_data.get("_principle"):
+            concepts = [t for t in payload_data.get("_tags", []) if t in ALLOWED_CONCEPTS]
+            return {
+                "type": payload_data.get("_type", "note"),
+                "title": str(payload_data["_principle"])[:100],
+                "narrative": payload_data.get("content", ""),
+                "facts": [],
+                "files_read": [],
+                "files_modified": [],
+                "concepts": concepts,
+                "impact_score": int(payload_data.get("_impact_score", 5)),
+            }
+
         prompt = f"""
 Analyze this tool event and extract a distilled learning.
 Return JSON only:
@@ -106,10 +125,18 @@ Event:
         raw["concepts"] = [c for c in raw.get("concepts", []) if c in ALLOWED_CONCEPTS]
         return raw
 
+    def process_batch(self) -> int:
+        """Process up to BATCH_SIZE events. Returns count processed."""
+        processed = 0
+        for _ in range(BATCH_SIZE):
+            if self.process_one() is None:
+                break
+            processed += 1
+        return processed
+
     def run_forever(self):
         while True:
-            processed = self.process_one()
-            if processed is None:
+            if self.process_batch() == 0:
                 time.sleep(self.sleep_seconds)
 
 

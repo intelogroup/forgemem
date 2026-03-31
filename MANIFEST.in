@@ -17,3 +17,6 @@ global-exclude *.pem
 global-exclude *.key
 global-exclude *secrets*
 global-exclude md_scan_hashes.json
+global-exclude *.tok
+recursive-exclude integrations *.sh
+recursive-exclude secrets *

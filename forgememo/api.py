@@ -40,7 +40,7 @@ except ImportError:
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-DB_PATH = Path(os.environ.get("FORGEMEM_DB", Path.home() / "Developer" / "Forgemem" / "forgemem_memory.db"))
+DB_PATH = Path(os.environ.get("FORGEMEM_DB", Path.home() / ".forgememo" / "forgemem_memory.db"))
 POOL_SIZE = 5
 WEBHOOK_RETRY_INTERVAL = 30  # seconds
 

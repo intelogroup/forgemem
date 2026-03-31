@@ -64,13 +64,22 @@ forgememo status
 
 ## Agent Support
 
-| Agent | Auto-detected | Skill file written |
-|-------|:---:|:---:|
-| Claude Code | ✓ | `~/.claude/skills/forgememo.md` |
-| Gemini CLI | ✓ | `~/.gemini/forgememo-skill.md` |
-| OpenAI Codex | ✓ | `~/.codex/forgememo-skill.json` |
+| Agent | Hook config |
+|-------|-------------|
+| Claude Code | `integrations/claude-code/settings-snippet.json` |
+| OpenAI Codex | `integrations/codex/config-snippet.yaml` |
+| OpenCode | `integrations/opencode/config-snippet.json` |
+| Gemini CLI | `integrations/gemini/settings-snippet.json` |
 
-`forgememo init` detects which agents are installed and writes the appropriate skill file automatically. Agents use `search_memories` and `get_memory_details` via MCP — no extra configuration needed.
+Run the interactive setup script to wire up your tool:
+
+```bash
+bash integrations/setup.sh
+```
+
+For Claude Code it auto-applies the hooks block to `~/.claude/settings.json`. For other tools it prints the snippet to merge manually.
+
+`forgememo init` also detects Claude Code, Gemini CLI, and Codex and writes the appropriate skill file automatically. Agents call `search_memories` and `get_memory_details` via MCP — no extra configuration beyond the hook.
 
 ---
 

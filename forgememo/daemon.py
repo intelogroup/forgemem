@@ -19,11 +19,13 @@ import json
 import logging
 import os
 import signal
+import sqlite3
 import sys
 import threading
 from typing import Any
 
 from forgememo.storage import get_conn, init_db
+from pathlib import Path
 
 try:
     from flask import Flask, request, jsonify
@@ -37,13 +39,20 @@ except Exception:
     make_server = None
 
 
-LOG_FILE = os.environ.get(
-    "FORGEMEMO_DAEMON_LOG",
-    str((os.path.dirname(__file__)) + "/forgememo_daemon.log"),
-)
+_DEFAULT_LOG_PATH = os.path.join(Path.home(), ".forgememo", "logs", "forgememo_daemon.log")
+LOG_FILE = os.environ.get("FORGEMEMO_DAEMON_LOG", _DEFAULT_LOG_PATH)
 SOCKET_PATH = os.environ.get("FORGEMEMO_SOCKET", "/tmp/forgememo.sock")
 HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT")
 
+try:
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+except OSError:
+    if os.environ.get("FORGEMEMO_ALLOW_TMP_LOG") == "1":
+        # Fallback for restricted environments (e.g., test sandboxes)
+        LOG_FILE = "/tmp/forgememo_daemon.log"
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    else:
+        raise
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
@@ -187,106 +196,115 @@ def create_app() -> Flask:
         try:
             results = []
 
-            # Distilled summaries
-            params = [q]
-            sql = (
-                "SELECT d.id, d.ts, d.type, d.title, d.impact_score, d.project_id "
-                "FROM distilled_summaries d "
-                "WHERE d.id IN (SELECT rowid FROM distilled_summaries_fts "
-                "WHERE distilled_summaries_fts MATCH ?) "
-            )
-            if project_id:
-                sql += "AND d.project_id = ? "
-                params.append(project_id)
-            if type_filter:
-                sql += "AND d.type = ? "
-                params.append(type_filter)
-            sql += "ORDER BY d.impact_score DESC, d.ts DESC LIMIT ?"
-            params.append(k)
-            rows = conn.execute(sql, params).fetchall()
-            for r in rows:
-                results.append(
-                    {
-                        "id": f"d:{r['id']}",
-                        "ts": r["ts"],
-                        "type": r["type"],
-                        "title": r["title"],
-                        "impact_score": r["impact_score"],
-                        "project_id": r["project_id"],
-                    }
-                )
-
-            # Session summaries
-            params = [q]
-            sql = (
-                "SELECT s.id, s.ts, s.request, s.project_id "
-                "FROM session_summaries s "
-                "WHERE s.id IN (SELECT rowid FROM session_summaries_fts "
-                "WHERE session_summaries_fts MATCH ?) "
-            )
-            if project_id:
-                sql += "AND s.project_id = ? "
-                params.append(project_id)
-            sql += "ORDER BY s.ts DESC LIMIT ?"
-            params.append(max(1, min(k, 10)))
-            rows = conn.execute(sql, params).fetchall()
-            for r in rows:
-                results.append(
-                    {
-                        "id": f"s:{r['id']}",
-                        "ts": r["ts"],
-                        "type": "summary",
-                        "title": r["request"],
-                        "impact_score": None,
-                        "project_id": r["project_id"],
-                    }
-                )
-
-            # Compat principles (legacy)
             try:
+                # Distilled summaries
                 params = [q]
                 sql = (
-                    "SELECT p.id, p.ts, p.type, p.principle, p.impact_score, p.project_tag "
-                    "FROM principles p "
-                    "WHERE p.id IN (SELECT rowid FROM principles_fts WHERE principles_fts MATCH ?) "
+                    "SELECT d.id, d.ts, d.type, d.title, d.impact_score, d.project_id "
+                    "FROM distilled_summaries d "
+                    "WHERE d.id IN (SELECT rowid FROM distilled_summaries_fts "
+                    "WHERE distilled_summaries_fts MATCH ?) "
                 )
                 if project_id:
-                    sql += "AND p.project_tag = ? "
+                    sql += "AND d.project_id = ? "
                     params.append(project_id)
                 if type_filter:
-                    sql += "AND p.type = ? "
+                    sql += "AND d.type = ? "
                     params.append(type_filter)
-                sql += "ORDER BY p.impact_score DESC, p.ts DESC LIMIT ?"
+                sql += "ORDER BY d.impact_score DESC, d.ts DESC LIMIT ?"
                 params.append(k)
                 rows = conn.execute(sql, params).fetchall()
                 for r in rows:
-                    compat_id = int(r["id"]) + 1_000_000
                     results.append(
                         {
-                            "id": f"c:{compat_id}",
+                            "id": f"d:{r['id']}",
                             "ts": r["ts"],
                             "type": r["type"],
-                            "title": str(r["principle"])[:100],
+                            "title": r["title"],
                             "impact_score": r["impact_score"],
-                            "project_id": r["project_tag"],
+                            "project_id": r["project_id"],
                         }
                     )
-            except Exception:
-                pass
+
+                # Session summaries
+                params = [q]
+                sql = (
+                    "SELECT s.id, s.ts, s.request, s.project_id "
+                    "FROM session_summaries s "
+                    "WHERE s.id IN (SELECT rowid FROM session_summaries_fts "
+                    "WHERE session_summaries_fts MATCH ?) "
+                )
+                if project_id:
+                    sql += "AND s.project_id = ? "
+                    params.append(project_id)
+                sql += "ORDER BY s.ts DESC LIMIT ?"
+                params.append(max(1, min(k, 10)))
+                rows = conn.execute(sql, params).fetchall()
+                for r in rows:
+                    results.append(
+                        {
+                            "id": f"s:{r['id']}",
+                            "ts": r["ts"],
+                            "type": "summary",
+                            "title": r["request"],
+                            "impact_score": None,
+                            "project_id": r["project_id"],
+                        }
+                    )
+
+                # Compat principles (legacy)
+                try:
+                    params = [q]
+                    sql = (
+                        "SELECT p.id, p.ts, p.type, p.principle, p.impact_score, p.project_tag "
+                        "FROM principles p "
+                        "WHERE p.id IN (SELECT rowid FROM principles_fts WHERE principles_fts MATCH ?) "
+                    )
+                    if project_id:
+                        sql += "AND p.project_tag = ? "
+                        params.append(project_id)
+                    if type_filter:
+                        sql += "AND p.type = ? "
+                        params.append(type_filter)
+                    sql += "ORDER BY p.impact_score DESC, p.ts DESC LIMIT ?"
+                    params.append(k)
+                    rows = conn.execute(sql, params).fetchall()
+                    for r in rows:
+                        compat_id = int(r["id"]) + 1_000_000
+                        results.append(
+                            {
+                                "id": f"c:{compat_id}",
+                                "ts": r["ts"],
+                                "type": r["type"],
+                                "title": str(r["principle"])[:100],
+                                "impact_score": r["impact_score"],
+                                "project_id": r["project_tag"],
+                            }
+                        )
+                except Exception:
+                    pass
+            except sqlite3.OperationalError as e:
+                return jsonify({"error": "invalid_query", "message": str(e)}), 400
 
             if concepts:
+                # Batch-fetch concepts for all d: results in one query
+                d_ids = [int(r["id"].split(":")[1]) for r in results if r["id"].startswith("d:")]
+                if d_ids:
+                    placeholders = ",".join("?" * len(d_ids))
+                    concept_rows = conn.execute(
+                        f"SELECT id, concepts FROM distilled_summaries WHERE id IN ({placeholders})",
+                        d_ids,
+                    ).fetchall()
+                    concept_map = {row["id"]: _json_load_list(row["concepts"]) for row in concept_rows}
+                else:
+                    concept_map = {}
+
                 filtered = []
                 for r in results:
                     if r["id"].startswith("d:"):
-                        # Filter by concepts for distilled summaries only
-                        row = conn.execute(
-                            "SELECT concepts FROM distilled_summaries WHERE id=?",
-                            (int(r["id"].split(":")[1]),),
-                        ).fetchone()
-                        if row:
-                            c_list = _json_load_list(row["concepts"])
-                            if any(c in c_list for c in concepts):
-                                filtered.append(r)
+                        c_list = concept_map.get(int(r["id"].split(":")[1]), [])
+                        if any(c in c_list for c in concepts):
+                            filtered.append(r)
                     else:
                         filtered.append(r)
                 results = filtered

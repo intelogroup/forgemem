@@ -210,7 +210,7 @@ def extract_learnings(project: str, git_log: str) -> list[dict]:
         api_key = cfg.get_api_key("anthropic")
         if not api_key:
             log(
-                "ERROR: No Anthropic API key. Run: forgemem config anthropic --key sk-ant-..."
+                "ERROR: No Anthropic API key. Run: forgememo config anthropic --key sk-ant-..."
             )
             return []
         client = anthropic.Anthropic(api_key=api_key)
@@ -315,8 +315,8 @@ def main():
     if provider != "ollama" and not cfg.get_api_key(provider):
         log(
             f"ERROR: No API key configured for provider '{provider}'.\n"
-            f"  Run: forgemem config {provider} --key <your-key>\n"
-            "  Or use local Ollama (free): forgemem config ollama"
+            f"  Run: forgememo config {provider} --key <your-key>\n"
+            "  Or use local Ollama (free): forgememo config ollama"
         )
         sys.exit(1)
 

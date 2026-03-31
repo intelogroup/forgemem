@@ -190,7 +190,7 @@ def cmd_save(args):
     if p_id:
         summary += f" + principle #{p_id}"
     else:
-        summary += " (no principle yet — run: bm distill)"
+        summary += " (no principle yet — run: forgememo distill)"
     print(summary)
 
 
@@ -574,7 +574,7 @@ def cmd_capture(args):
     if p_id:
         summary += f" + principle #{p_id}"
     else:
-        summary += " — run: bm distill"
+        summary += " — run: forgememo distill"
     print(summary)
 
 

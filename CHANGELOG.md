@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-03-31
+
+- Fix: auto-init in `_main` callback called `init(yes=True)` without `provider=None` — Typer passes the `OptionInfo` default object which is truthy, causing `_configure_provider_noninteractive` to error with "Invalid provider: <typer.models.OptionInfo object>" on first `forgememo status` run
+- Fix: `core.py` save summary printed "run: bm distill" (stale old CLI name) — now "run: forgememo distill"
+- Fix: `scanner.py` error messages referenced "forgemem config" (old CLI name) — now "forgememo config"
+
 ## [0.2.2] — 2026-03-31
 
 - Fix: sync `requirements.txt` with `pyproject.toml` — bump `fastmcp>=0.6.0` → `>=2.0.0`, add `typer`, `rich`, `questionary` (CI was installing incompatible versions)

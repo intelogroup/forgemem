@@ -25,24 +25,25 @@ from forgememo import config as cfg
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv(Path(__file__).parent / ".env")
 except ImportError:
     pass
 
-FORGEMEM_DIR  = Path.home() / "Developer" / "Forgemem"
-SCAN_ROOT     = Path.home() / "Developer"
-MEMORY_ROOT   = Path.home() / ".claude" / "projects"
-LOG_FILE      = FORGEMEM_DIR / "daily_scan.log"
-FORGEMEM_CLI  = FORGEMEM_DIR / "forgemem.py"
-HASH_FILE     = FORGEMEM_DIR / "md_scan_hashes.json"
-PYTHON        = sys.executable
+FORGEMEM_DIR = Path.home() / ".forgememo"
+SCAN_ROOT = Path.home()
+MEMORY_ROOT = Path.home() / ".claude" / "projects"
+LOG_FILE = FORGEMEM_DIR / "daily_scan.log"
+FORGEMEM_CLI = FORGEMEM_DIR / "forgemem.py"
+HASH_FILE = FORGEMEM_DIR / "md_scan_hashes.json"
+PYTHON = sys.executable
 
 # Repos to skip (add any you don't want scanned)
 SKIP_DIRS = {"Forgemem", "node_modules", ".git"}
 
 # Max chars to send to Claude per file (keep costs low)
 MAX_LOG_CHARS = 3000
-MAX_MD_CHARS  = 4000
+MAX_MD_CHARS = 4000
 
 # Skip index file — it's just pointers, not learnings
 SKIP_MD_FILES = {"MEMORY.md"}
@@ -67,7 +68,11 @@ def find_git_repos() -> list[Path]:
             # One level deeper (e.g. ~/Developer/myorg/repo)
             try:
                 for sub in d.iterdir():
-                    if sub.is_dir() and (sub / ".git").exists() and sub.name not in SKIP_DIRS:
+                    if (
+                        sub.is_dir()
+                        and (sub / ".git").exists()
+                        and sub.name not in SKIP_DIRS
+                    ):
                         repos.append(sub)
             except PermissionError:
                 pass
@@ -77,7 +82,9 @@ def find_git_repos() -> list[Path]:
 def git_log_since_24h(repo: Path) -> str:
     result = subprocess.run(
         ["git", "log", "--since=24 hours ago", "--oneline", "--stat", "--no-merges"],
-        capture_output=True, text=True, cwd=repo
+        capture_output=True,
+        text=True,
+        cwd=repo,
     )
     if result.returncode != 0:
         log(f"  [WARN] git log failed for {repo.name}: {result.stderr.strip()}")
@@ -96,18 +103,37 @@ LEARNING_TOOL = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "type":         {"type": "string", "enum": ["success", "failure", "plan", "note"]},
-                        "content":      {"type": "string", "description": "One paragraph with enough context to be useful later"},
-                        "principle":    {"type": "string", "description": "One concrete actionable sentence — the lasting lesson"},
-                        "impact_score": {"type": "integer", "minimum": 1, "maximum": 10},
-                        "tags":         {"type": "array", "items": {"type": "string"}}
+                        "type": {
+                            "type": "string",
+                            "enum": ["success", "failure", "plan", "note"],
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "One paragraph with enough context to be useful later",
+                        },
+                        "principle": {
+                            "type": "string",
+                            "description": "One concrete actionable sentence — the lasting lesson",
+                        },
+                        "impact_score": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 10,
+                        },
+                        "tags": {"type": "array", "items": {"type": "string"}},
                     },
-                    "required": ["type", "content", "principle", "impact_score", "tags"]
-                }
+                    "required": [
+                        "type",
+                        "content",
+                        "principle",
+                        "impact_score",
+                        "tags",
+                    ],
+                },
             }
         },
-        "required": ["learnings"]
-    }
+        "required": ["learnings"],
+    },
 }
 
 
@@ -118,7 +144,7 @@ def call_haiku_tool(client, prompt: str, max_tokens: int) -> list[dict]:
         max_tokens=max_tokens,
         tools=[LEARNING_TOOL],
         tool_choice={"type": "tool", "name": "save_learnings"},
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": prompt}],
     )
     for block in response.content:
         if block.type == "tool_use" and block.name == "save_learnings":
@@ -130,8 +156,7 @@ def _extract_via_inference(prompt: str) -> list[dict]:
     """Extract learnings via inference.call() for non-Anthropic providers.
     Uses a JSON-structured prompt since tool_use is Anthropic-specific."""
     json_prompt = (
-        prompt +
-        '\n\nRespond with JSON only — no markdown fences, no extra text:\n'
+        prompt + "\n\nRespond with JSON only — no markdown fences, no extra text:\n"
         '{"learnings": [{"type": "success|failure|plan|note", "content": "...", '
         '"principle": "...", "impact_score": 5, "tags": ["..."]}]}'
     )
@@ -171,9 +196,9 @@ def extract_learnings(project: str, git_log: str) -> list[dict]:
     provider = cfg.get_provider()
     prompt = (
         f'Analyze git commit activity for project "{project}". '
-        f'Extract 1-3 meaningful learnings (skip trivial commits/version bumps). '
-        f'Focus on bugs fixed (failures), features added (successes), and technical decisions (plans/notes).\n\n'
-        f'Git activity (last 24h):\n{git_log[:MAX_LOG_CHARS]}'
+        f"Extract 1-3 meaningful learnings (skip trivial commits/version bumps). "
+        f"Focus on bugs fixed (failures), features added (successes), and technical decisions (plans/notes).\n\n"
+        f"Git activity (last 24h):\n{git_log[:MAX_LOG_CHARS]}"
     )
 
     if provider == "anthropic":
@@ -184,7 +209,9 @@ def extract_learnings(project: str, git_log: str) -> list[dict]:
             return []
         api_key = cfg.get_api_key("anthropic")
         if not api_key:
-            log("ERROR: No Anthropic API key. Run: forgemem config anthropic --key sk-ant-...")
+            log(
+                "ERROR: No Anthropic API key. Run: forgemem config anthropic --key sk-ant-..."
+            )
             return []
         client = anthropic.Anthropic(api_key=api_key)
         try:
@@ -199,6 +226,7 @@ def extract_learnings(project: str, git_log: str) -> list[dict]:
 def is_duplicate(content: str, project: str) -> bool:
     """Check if a near-identical learning already exists in the DB (v2 events or legacy traces)."""
     from forgememo.storage import get_conn
+
     conn = get_conn()
     try:
         fingerprint = content[:120].strip()
@@ -227,19 +255,22 @@ def _post_learning_to_daemon(project: str, learning: dict, session_id: str) -> b
     """Post a learning to the daemon as a v2 event. Returns True on success."""
     try:
         from forgememo.hook import _post_event
+
         event = {
             "session_id": session_id,
             "project_id": project,
             "source_tool": "forgememo-scanner",
             "event_type": "scanner_learning",
             "tool_name": None,
-            "payload": json.dumps({
-                "content": learning.get("content", ""),
-                "_principle": learning.get("principle"),
-                "_impact_score": learning.get("impact_score", 5),
-                "_tags": learning.get("tags") or [],
-                "_type": learning.get("type", "note"),
-            }),
+            "payload": json.dumps(
+                {
+                    "content": learning.get("content", ""),
+                    "_principle": learning.get("principle"),
+                    "_impact_score": learning.get("impact_score", 5),
+                    "_tags": learning.get("tags") or [],
+                    "_type": learning.get("type", "note"),
+                }
+            ),
             "seq": int(time.time() * 1000),
         }
         _post_event(event)
@@ -323,6 +354,7 @@ def main():
 
 # ── Pass 2: memory doc scanning ──────────────────────────────────────────────
 
+
 def load_hashes() -> dict:
     if HASH_FILE.exists():
         try:
@@ -367,7 +399,7 @@ def project_from_md_path(md_path: Path) -> str:
     parts = slug.lstrip("-").split("-")
     try:
         idx = next(i for i, p in enumerate(parts) if p.lower() == "developer")
-        remainder = "-".join(parts[idx + 1:])
+        remainder = "-".join(parts[idx + 1 :])
         return remainder if remainder else "global"
     except StopIteration:
         return parts[-1] if parts else "global"
@@ -378,10 +410,10 @@ def extract_md_learnings(project: str, filename: str, content: str) -> list[dict
     provider = cfg.get_provider()
     prompt = (
         f'Read memory file "{filename}" for project "{project}". '
-        f'Extract 1-4 durable, actionable learnings worth preserving long-term. '
-        f'Focus on: technical gotchas/failures/fixes, successful patterns, non-obvious API behaviors. '
-        f'Skip: obvious facts, in-progress TODOs, things that will change soon.\n\n'
-        f'Memory file content:\n{content[:MAX_MD_CHARS]}'
+        f"Extract 1-4 durable, actionable learnings worth preserving long-term. "
+        f"Focus on: technical gotchas/failures/fixes, successful patterns, non-obvious API behaviors. "
+        f"Skip: obvious facts, in-progress TODOs, things that will change soon.\n\n"
+        f"Memory file content:\n{content[:MAX_MD_CHARS]}"
     )
 
     if provider == "anthropic":
@@ -432,7 +464,9 @@ def scan_memory_docs() -> int:
                 continue
 
             project = project_from_md_path(md_file)
-            log(f"  {md_file.name} changed — extracting learnings for project={project}...")
+            log(
+                f"  {md_file.name} changed — extracting learnings for project={project}..."
+            )
 
             learnings = extract_md_learnings(project, md_file.name, content)
             if not learnings:
@@ -446,7 +480,9 @@ def scan_memory_docs() -> int:
             hashes[file_key] = current_hash
         # Lock released here — hashes written atomically
 
-    log(f"Pass 2 done. Checked {files_checked} .md files, saved {total_saved} trace(s).")
+    log(
+        f"Pass 2 done. Checked {files_checked} .md files, saved {total_saved} trace(s)."
+    )
     return total_saved
 
 

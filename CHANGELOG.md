@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-03-31
+
+- Fix: sync `requirements.txt` with `pyproject.toml` — bump `fastmcp>=0.6.0` → `>=2.0.0`, add `typer`, `rich`, `questionary` (CI was installing incompatible versions)
+- Add: `.github/workflows/ci.yml` — cross-platform matrix (ubuntu/macos/windows × Python 3.10/3.12) plus Linux container job
+
 ## [0.2.1] — 2026-03-31
 
 - Fix: daemon `/search` N+1 concept query replaced with a single `WHERE id IN (...)` batch fetch

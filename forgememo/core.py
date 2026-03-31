@@ -24,11 +24,14 @@ from pathlib import Path
 # Load .env from Forgemem directory if python-dotenv is available
 try:
     from dotenv import load_dotenv
+
     load_dotenv(Path(__file__).parent / ".env")
 except ImportError:
     pass
 
-DB_PATH = Path(os.environ.get("FORGEMEM_DB", Path.home() / ".forgemem" / "forgemem_memory.db"))
+DB_PATH = Path(
+    os.environ.get("FORGEMEM_DB", Path.home() / ".forgememo" / "forgememo_memory.db")
+)
 
 VALID_TYPES = ("success", "failure", "plan", "note")
 
@@ -84,7 +87,9 @@ def detect_project() -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, cwd=os.getcwd()
+            capture_output=True,
+            text=True,
+            cwd=os.getcwd(),
         )
         if result.returncode == 0:
             return Path(result.stdout.strip()).name
@@ -102,16 +107,18 @@ def cmd_init(args):
     print(f"Forgemem DB initialized at {DB_PATH}")
 
 
-def insert_principle(conn, source_trace_id, project_tag, trace_type, principle, score, tags_str):
+def insert_principle(
+    conn, source_trace_id, project_tag, trace_type, principle, score, tags_str
+):
     cur = conn.execute(
         "INSERT INTO principles (source_trace_id, project_tag, type, principle, impact_score, tags) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (source_trace_id, project_tag, trace_type, principle, score, tags_str)
+        (source_trace_id, project_tag, trace_type, principle, score, tags_str),
     )
     p_id = cur.lastrowid
     conn.execute(
         "INSERT INTO principles_fts(rowid, principle, project_tag, tags) VALUES (?, ?, ?, ?)",
-        (p_id, principle, project_tag or "", tags_str or "")
+        (p_id, principle, project_tag or "", tags_str or ""),
     )
     return p_id
 
@@ -119,11 +126,12 @@ def insert_principle(conn, source_trace_id, project_tag, trace_type, principle, 
 def distill_via_api(content: str, trace_type: str) -> dict:
     """Extract a principle from a trace using the configured AI provider."""
     from forgememo import inference
+
     prompt = (
-        f'Extract a single 1-2 sentence principle from this {trace_type} trace. '
-        f'Be concrete and actionable. '
+        f"Extract a single 1-2 sentence principle from this {trace_type} trace. "
+        f"Be concrete and actionable. "
         f'Return JSON only, no markdown: {{"principle": "...", "impact_score": 5, "tags": ["..."]}}\n\n'
-        f'Trace:\n{content[:2000]}'
+        f"Trace:\n{content[:2000]}"
     )
     raw = inference.call(prompt, max_tokens=300)
     if raw.startswith("```"):
@@ -133,7 +141,9 @@ def distill_via_api(content: str, trace_type: str) -> dict:
     try:
         return json.loads(raw.strip())
     except json.JSONDecodeError as e:
-        raise ValueError(f"Provider returned non-JSON (len={len(raw)}): {raw[:200]}") from e
+        raise ValueError(
+            f"Provider returned non-JSON (len={len(raw)}): {raw[:200]}"
+        ) from e
 
 
 def cmd_save(args):
@@ -144,19 +154,21 @@ def cmd_save(args):
     with conn:
         cur = conn.execute(
             "INSERT INTO traces (session_id, project_tag, type, content) VALUES (?, ?, ?, ?)",
-            (args.session, project, args.type, args.content)
+            (args.session, project, args.type, args.content),
         )
         trace_id = cur.lastrowid
         conn.execute(
             "INSERT INTO traces_fts(rowid, content, project_tag, type) VALUES (?, ?, ?, ?)",
-            (trace_id, args.content, project or "", args.type)
+            (trace_id, args.content, project or "", args.type),
         )
 
     p_id = None
 
     if args.principle:
         # Manual principle — instant, no API
-        p_id = insert_principle(conn, trace_id, project, args.type, args.principle, args.score, tags_str)
+        p_id = insert_principle(
+            conn, trace_id, project, args.type, args.principle, args.score, tags_str
+        )
         conn.execute("UPDATE traces SET distilled=1 WHERE id=?", (trace_id,))
     elif args.distill:
         # Explicit distill flag — call API now
@@ -165,7 +177,9 @@ def cmd_save(args):
         principle = result.get("principle", "")
         score = result.get("impact_score", args.score)
         tags_from_api = ",".join(result.get("tags", [])) or tags_str
-        p_id = insert_principle(conn, trace_id, project, args.type, principle, score, tags_from_api)
+        p_id = insert_principle(
+            conn, trace_id, project, args.type, principle, score, tags_from_api
+        )
         conn.execute("UPDATE traces SET distilled=1 WHERE id=?", (trace_id,))
         print(f"  Principle: {principle}", file=sys.stderr)
 
@@ -180,28 +194,36 @@ def cmd_save(args):
     print(summary)
 
 
-_P_BASE = ("SELECT p.id, p.ts, p.project_tag, p.type, p.principle, p.impact_score, p.tags "
-           "FROM principles p WHERE p.id IN (SELECT rowid FROM principles_fts WHERE principles_fts MATCH ?) ")
+_P_BASE = (
+    "SELECT p.id, p.ts, p.project_tag, p.type, p.principle, p.impact_score, p.tags "
+    "FROM principles p WHERE p.id IN (SELECT rowid FROM principles_fts WHERE principles_fts MATCH ?) "
+)
 _P_QUERIES = {
     (False, False): _P_BASE + "ORDER BY p.impact_score DESC, p.ts DESC LIMIT ?",
-    (True,  False): _P_BASE + "AND p.project_tag = ? ORDER BY p.impact_score DESC, p.ts DESC LIMIT ?",
-    (False, True):  _P_BASE + "AND p.type = ? ORDER BY p.impact_score DESC, p.ts DESC LIMIT ?",
-    (True,  True):  _P_BASE + "AND p.project_tag = ? AND p.type = ? ORDER BY p.impact_score DESC, p.ts DESC LIMIT ?",
+    (True, False): _P_BASE
+    + "AND p.project_tag = ? ORDER BY p.impact_score DESC, p.ts DESC LIMIT ?",
+    (False, True): _P_BASE
+    + "AND p.type = ? ORDER BY p.impact_score DESC, p.ts DESC LIMIT ?",
+    (True, True): _P_BASE
+    + "AND p.project_tag = ? AND p.type = ? ORDER BY p.impact_score DESC, p.ts DESC LIMIT ?",
 }
 
-_T_BASE = ("SELECT t.id, t.ts, t.project_tag, t.type, t.content, t.distilled "
-           "FROM traces t WHERE t.id IN (SELECT rowid FROM traces_fts WHERE traces_fts MATCH ?) ")
+_T_BASE = (
+    "SELECT t.id, t.ts, t.project_tag, t.type, t.content, t.distilled "
+    "FROM traces t WHERE t.id IN (SELECT rowid FROM traces_fts WHERE traces_fts MATCH ?) "
+)
 _T_QUERIES = {
     (False, False): _T_BASE + "ORDER BY t.ts DESC LIMIT ?",
-    (True,  False): _T_BASE + "AND t.project_tag = ? ORDER BY t.ts DESC LIMIT ?",
-    (False, True):  _T_BASE + "AND t.type = ? ORDER BY t.ts DESC LIMIT ?",
-    (True,  True):  _T_BASE + "AND t.project_tag = ? AND t.type = ? ORDER BY t.ts DESC LIMIT ?",
+    (True, False): _T_BASE + "AND t.project_tag = ? ORDER BY t.ts DESC LIMIT ?",
+    (False, True): _T_BASE + "AND t.type = ? ORDER BY t.ts DESC LIMIT ?",
+    (True, True): _T_BASE
+    + "AND t.project_tag = ? AND t.type = ? ORDER BY t.ts DESC LIMIT ?",
 }
 
 
 def _sanitize_fts_query(query: str) -> str:
     """Escape single quotes and strip FTS5-unsafe characters to prevent syntax errors."""
-    return query.replace("'", "''").replace('"', '')
+    return query.replace("'", "''").replace('"', "")
 
 
 def cmd_retrieve(args):
@@ -254,7 +276,9 @@ def cmd_retrieve(args):
         lines.append("## Principles")
         for p in results["principles"]:
             tags = f" | tags: {p['tags']}" if p.get("tags") else ""
-            lines.append(f"\n**[{p['type']}] {p['project_tag'] or 'global'}** — {p['ts'][:10]}")
+            lines.append(
+                f"\n**[{p['type']}] {p['project_tag'] or 'global'}** — {p['ts'][:10]}"
+            )
             lines.append(f"> {p['principle']}")
             lines.append(f"Score: {p['impact_score']}/10{tags}")
     else:
@@ -264,17 +288,33 @@ def cmd_retrieve(args):
         lines.append("\n## Raw Traces")
         for t in results["traces"]:
             distilled = " ✓" if t["distilled"] else ""
-            lines.append(f"\n**[{t['type']}] {t['project_tag'] or 'global'}** — {t['ts'][:10]}{distilled}")
-            lines.append(t["content"][:500] + ("..." if len(t["content"]) > 500 else ""))
+            lines.append(
+                f"\n**[{t['type']}] {t['project_tag'] or 'global'}** — {t['ts'][:10]}{distilled}"
+            )
+            lines.append(
+                t["content"][:500] + ("..." if len(t["content"]) > 500 else "")
+            )
 
     print("\n".join(lines))
 
 
 _DISTILL_QUERIES = {
-    (False, False): "SELECT id, type, content, project_tag FROM traces WHERE distilled=0",
-    (True,  False): "SELECT id, type, content, project_tag FROM traces WHERE distilled=0 AND session_id=?",
-    (False, True):  "SELECT id, type, content, project_tag FROM traces WHERE distilled=0 AND project_tag=?",
-    (True,  True):  "SELECT id, type, content, project_tag FROM traces WHERE distilled=0 AND session_id=? AND project_tag=?",
+    (
+        False,
+        False,
+    ): "SELECT id, type, content, project_tag FROM traces WHERE distilled=0",
+    (
+        True,
+        False,
+    ): "SELECT id, type, content, project_tag FROM traces WHERE distilled=0 AND session_id=?",
+    (
+        False,
+        True,
+    ): "SELECT id, type, content, project_tag FROM traces WHERE distilled=0 AND project_tag=?",
+    (
+        True,
+        True,
+    ): "SELECT id, type, content, project_tag FROM traces WHERE distilled=0 AND session_id=? AND project_tag=?",
 }
 
 
@@ -303,7 +343,15 @@ def cmd_distill(args):
             principle = result.get("principle", "")
             score = result.get("impact_score", 5)
             tags = ",".join(result.get("tags", []))
-            insert_principle(conn, row["id"], row["project_tag"], row["type"], principle, score, tags or None)
+            insert_principle(
+                conn,
+                row["id"],
+                row["project_tag"],
+                row["type"],
+                principle,
+                score,
+                tags or None,
+            )
             conn.execute("UPDATE traces SET distilled=1 WHERE id=?", (row["id"],))
             conn.commit()
             count += 1
@@ -319,22 +367,37 @@ def cmd_stats(args):
     conn = get_conn()
     if args.project:
         p = [args.project]
-        t_total     = conn.execute("SELECT COUNT(*) FROM traces WHERE project_tag=?", p).fetchone()[0]
-        t_by_type   = conn.execute("SELECT type, COUNT(*) as n FROM traces WHERE project_tag=? GROUP BY type ORDER BY n DESC", p).fetchall()
-        p_total     = conn.execute("SELECT COUNT(*) FROM principles WHERE project_tag=?", p).fetchone()[0]
-        undistilled = conn.execute("SELECT COUNT(*) FROM traces WHERE project_tag=? AND distilled=0", p).fetchone()[0]
+        t_total = conn.execute(
+            "SELECT COUNT(*) FROM traces WHERE project_tag=?", p
+        ).fetchone()[0]
+        t_by_type = conn.execute(
+            "SELECT type, COUNT(*) as n FROM traces WHERE project_tag=? GROUP BY type ORDER BY n DESC",
+            p,
+        ).fetchall()
+        p_total = conn.execute(
+            "SELECT COUNT(*) FROM principles WHERE project_tag=?", p
+        ).fetchone()[0]
+        undistilled = conn.execute(
+            "SELECT COUNT(*) FROM traces WHERE project_tag=? AND distilled=0", p
+        ).fetchone()[0]
     else:
-        t_total     = conn.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
-        t_by_type   = conn.execute("SELECT type, COUNT(*) as n FROM traces GROUP BY type ORDER BY n DESC").fetchall()
-        p_total     = conn.execute("SELECT COUNT(*) FROM principles").fetchone()[0]
-        undistilled = conn.execute("SELECT COUNT(*) FROM traces WHERE distilled=0").fetchone()[0]
+        t_total = conn.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
+        t_by_type = conn.execute(
+            "SELECT type, COUNT(*) as n FROM traces GROUP BY type ORDER BY n DESC"
+        ).fetchall()
+        p_total = conn.execute("SELECT COUNT(*) FROM principles").fetchone()[0]
+        undistilled = conn.execute(
+            "SELECT COUNT(*) FROM traces WHERE distilled=0"
+        ).fetchone()[0]
     top_projects = conn.execute(
         "SELECT project_tag, COUNT(*) as n FROM traces GROUP BY project_tag ORDER BY n DESC LIMIT 5"
     ).fetchall()
 
     conn.close()
 
-    title = "Forgemem Stats" + (f" — {args.project}" if args.project else " — all projects")
+    title = "Forgemem Stats" + (
+        f" — {args.project}" if args.project else " — all projects"
+    )
     print(f"\n{title}")
     print(f"  Traces:     {t_total} ({undistilled} undistilled)")
     print(f"  Principles: {p_total}")
@@ -350,6 +413,7 @@ def cmd_stats(args):
 def mine_memories_via_api(md_content: str, filename: str) -> list[dict]:
     """Extract traces from a memory .md file using the configured AI provider."""
     from forgememo import inference
+
     prompt = (
         "You are reading a project memory file. Extract ALL meaningful traces (successes, failures, notes, plans) "
         "that could be saved as long-term lessons. For each trace return a JSON object with keys: "
@@ -399,7 +463,11 @@ def cmd_mine_memories(args):
             trace_type = t.get("type", "note")
             if trace_type not in VALID_TYPES:
                 trace_type = "note"
-            project = t.get("project") or md_file.stem.split("_")[1] if "_" in md_file.stem else md_file.stem
+            project = (
+                t.get("project") or md_file.stem.split("_")[1]
+                if "_" in md_file.stem
+                else md_file.stem
+            )
             trace_content = t.get("content", "").strip()
             if not trace_content:
                 continue
@@ -407,7 +475,7 @@ def cmd_mine_memories(args):
             # Skip if near-duplicate already exists
             existing = conn.execute(
                 "SELECT id FROM traces WHERE project_tag=? AND substr(content,1,80)=?",
-                (project, trace_content[:80])
+                (project, trace_content[:80]),
             ).fetchone()
             if existing:
                 print(f"    skip (duplicate): {trace_content[:60]}...")
@@ -415,12 +483,12 @@ def cmd_mine_memories(args):
 
             cur = conn.execute(
                 "INSERT INTO traces (project_tag, type, content) VALUES (?, ?, ?)",
-                (project, trace_type, trace_content)
+                (project, trace_type, trace_content),
             )
             trace_id = cur.lastrowid
             conn.execute(
                 "INSERT INTO traces_fts(rowid, content, project_tag, type) VALUES (?, ?, ?, ?)",
-                (trace_id, trace_content, project or "", trace_type)
+                (trace_id, trace_content, project or "", trace_type),
             )
             conn.commit()
             total_saved += 1
@@ -438,7 +506,9 @@ def cmd_capture(args):
         since = ["--since", args.since] if args.since else []
         result = subprocess.run(
             ["git", "log", "--oneline", f"-n{limit}"] + since,
-            capture_output=True, text=True, cwd=os.getcwd()
+            capture_output=True,
+            text=True,
+            cwd=os.getcwd(),
         )
         if result.returncode != 0:
             print(f"ERROR: git log failed: {result.stderr.strip()}", file=sys.stderr)
@@ -455,11 +525,16 @@ def cmd_capture(args):
             sys.exit(1)
         content = path.read_text(encoding="utf-8", errors="replace")
         if len(content) > 8000:
-            content = content[:8000] + f"\n... (truncated at 8000 chars, full file: {path})"
+            content = (
+                content[:8000] + f"\n... (truncated at 8000 chars, full file: {path})"
+            )
     elif not sys.stdin.isatty():
         content = sys.stdin.read().strip()
     else:
-        print("ERROR: Provide --git, --file PATH, or pipe content via stdin.", file=sys.stderr)
+        print(
+            "ERROR: Provide --git, --file PATH, or pipe content via stdin.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if not content.strip():
@@ -471,12 +546,12 @@ def cmd_capture(args):
     conn = get_conn()
     cur = conn.execute(
         "INSERT INTO traces (project_tag, type, content) VALUES (?, ?, ?)",
-        (project, args.type, content)
+        (project, args.type, content),
     )
     trace_id = cur.lastrowid
     conn.execute(
         "INSERT INTO traces_fts(rowid, content, project_tag, type) VALUES (?, ?, ?, ?)",
-        (trace_id, content, project or "", args.type)
+        (trace_id, content, project or "", args.type),
     )
 
     p_id = None
@@ -486,7 +561,9 @@ def cmd_capture(args):
         principle = result.get("principle", "")
         score = result.get("impact_score", 5)
         tags = ",".join(result.get("tags", [])) or None
-        p_id = insert_principle(conn, trace_id, project, args.type, principle, score, tags)
+        p_id = insert_principle(
+            conn, trace_id, project, args.type, principle, score, tags
+        )
         conn.execute("UPDATE traces SET distilled=1 WHERE id=?", (trace_id,))
         print(f"  Principle: {principle}", file=sys.stderr)
 
@@ -525,7 +602,7 @@ def cmd_export(args):
     rows = conn.execute(
         f"SELECT p.ts, p.project_tag, p.type, p.principle, p.impact_score, p.tags "
         f"FROM principles p {where} ORDER BY p.impact_score DESC, p.ts DESC LIMIT ?",
-        params + [args.k]
+        params + [args.k],
     ).fetchall()
     conn.close()
 
@@ -540,7 +617,9 @@ def cmd_export(args):
 
     for r in rows:
         tags = f" [{r['tags']}]" if r["tags"] else ""
-        lines.append(f"- **[{r['type']}|{r['project_tag'] or 'global'}|{r['ts'][:10]}|score:{r['impact_score']}]**{tags}")
+        lines.append(
+            f"- **[{r['type']}|{r['project_tag'] or 'global'}|{r['ts'][:10]}|score:{r['impact_score']}]**{tags}"
+        )
         lines.append(f"  {r['principle']}")
 
     print("\n".join(lines))
@@ -560,7 +639,9 @@ def main():
     p_save.add_argument("--principle", default=None, help="Manual principle (no API)")
     p_save.add_argument("--score", type=int, default=5)
     p_save.add_argument("--tags", default=None, help="Comma-separated tags")
-    p_save.add_argument("--distill", action="store_true", help="Auto-distill via Claude API")
+    p_save.add_argument(
+        "--distill", action="store_true", help="Auto-distill via Claude API"
+    )
 
     p_ret = sub.add_parser("retrieve", help="Search traces and principles")
     p_ret.add_argument("query")
@@ -569,25 +650,50 @@ def main():
     p_ret.add_argument("--type", choices=VALID_TYPES, default=None)
     p_ret.add_argument("--format", choices=["md", "json"], default="md")
 
-    p_cap = sub.add_parser("capture", help="Capture content from stdin, file, or git log")
+    p_cap = sub.add_parser(
+        "capture", help="Capture content from stdin, file, or git log"
+    )
     p_cap.add_argument("--type", required=True, choices=VALID_TYPES)
-    p_cap.add_argument("--stdin", action="store_true", help="Read from stdin (also works implicitly via pipe)")
+    p_cap.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read from stdin (also works implicitly via pipe)",
+    )
     p_cap.add_argument("--file", default=None, metavar="PATH", help="Read from a file")
-    p_cap.add_argument("--git", action="store_true", help="Capture git log from current repo")
-    p_cap.add_argument("--limit", type=int, default=50, help="Max commits for --git (default 50)")
-    p_cap.add_argument("--since", default=None, help="--git: e.g. '2 days ago', 'yesterday'")
-    p_cap.add_argument("--project", default=None, help="Project tag (auto-detected from cwd)")
-    p_cap.add_argument("--distill", action="store_true", help="Distill immediately via Claude Haiku")
+    p_cap.add_argument(
+        "--git", action="store_true", help="Capture git log from current repo"
+    )
+    p_cap.add_argument(
+        "--limit", type=int, default=50, help="Max commits for --git (default 50)"
+    )
+    p_cap.add_argument(
+        "--since", default=None, help="--git: e.g. '2 days ago', 'yesterday'"
+    )
+    p_cap.add_argument(
+        "--project", default=None, help="Project tag (auto-detected from cwd)"
+    )
+    p_cap.add_argument(
+        "--distill", action="store_true", help="Distill immediately via Claude Haiku"
+    )
 
-    p_distill = sub.add_parser("distill", help="Batch distill undistilled traces via Claude API")
+    p_distill = sub.add_parser(
+        "distill", help="Batch distill undistilled traces via Claude API"
+    )
     p_distill.add_argument("--session", default=None)
     p_distill.add_argument("--project", default=None)
 
     p_stats = sub.add_parser("stats", help="Show DB stats")
     p_stats.add_argument("--project", default=None)
 
-    p_backup = sub.add_parser("backup", help="Safe online backup (WAL-safe, timestamped)")
-    p_backup.add_argument("--dest", default=None, metavar="PATH", help="Backup destination (default: auto-timestamped)")
+    p_backup = sub.add_parser(
+        "backup", help="Safe online backup (WAL-safe, timestamped)"
+    )
+    p_backup.add_argument(
+        "--dest",
+        default=None,
+        metavar="PATH",
+        help="Backup destination (default: auto-timestamped)",
+    )
 
     p_export = sub.add_parser("export", help="Export top principles as markdown")
     p_export.add_argument("--project", default=None)

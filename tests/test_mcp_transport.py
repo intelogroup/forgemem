@@ -28,7 +28,7 @@ def test_daemon_get_uses_socket_when_available(monkeypatch):
             return _Resp(payload={"ok": True})
 
     monkeypatch.setattr(mcp_server, "DAEMON_URL", None)
-    monkeypatch.setattr(mcp_server, "HTTP_PORT", None)
+    # HTTP_PORT now defaults to "5555" (HTTP-first) - don't override to None
     monkeypatch.setattr(mcp_server, "_socket_session", lambda: _Session())
 
     data = mcp_server._daemon_get("/health", params={"a": "b"})
@@ -73,7 +73,7 @@ def test_daemon_post_uses_socket_when_available(monkeypatch):
             return _Resp(payload={"ok": True})
 
     monkeypatch.setattr(mcp_server, "DAEMON_URL", None)
-    monkeypatch.setattr(mcp_server, "HTTP_PORT", None)
+    # HTTP_PORT now defaults to "5555" (HTTP-first) - don't override to None
     monkeypatch.setattr(mcp_server, "_socket_session", lambda: _Session())
 
     data = mcp_server._daemon_post("/events", payload={"a": 1})
@@ -112,18 +112,22 @@ def test_daemon_post_raises_when_no_transport(monkeypatch):
 # Windows transport: socket must be skipped, HTTP used instead
 # ---------------------------------------------------------------------------
 
+
 class TestWindowsTransport:
     """Verify unix socket is never attempted on win32 and HTTP fallback is used."""
 
     def _make_session(self, called: dict, method: str):
         """Return a fake socket session that records if it was used."""
+
         class _Session:
             def get(self, url, **kw):
                 called["socket"] = True
                 raise AssertionError("socket session must not be used on Windows")
+
             def post(self, url, **kw):
                 called["socket"] = True
                 raise AssertionError("socket session must not be used on Windows")
+
         return _Session()
 
     def test_daemon_get_skips_socket_on_windows(self, monkeypatch):
@@ -136,7 +140,9 @@ class TestWindowsTransport:
         monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setattr(mcp_server, "DAEMON_URL", None)
         monkeypatch.setattr(mcp_server, "HTTP_PORT", "5555")
-        monkeypatch.setattr(mcp_server, "_socket_session", lambda: self._make_session(called, "get"))
+        monkeypatch.setattr(
+            mcp_server, "_socket_session", lambda: self._make_session(called, "get")
+        )
         monkeypatch.setattr(mcp_server.requests, "get", fake_get)
 
         data = mcp_server._daemon_get("/health")
@@ -154,7 +160,9 @@ class TestWindowsTransport:
         monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setattr(mcp_server, "DAEMON_URL", None)
         monkeypatch.setattr(mcp_server, "HTTP_PORT", "5555")
-        monkeypatch.setattr(mcp_server, "_socket_session", lambda: self._make_session(called, "post"))
+        monkeypatch.setattr(
+            mcp_server, "_socket_session", lambda: self._make_session(called, "post")
+        )
         monkeypatch.setattr(mcp_server.requests, "post", fake_post)
 
         data = mcp_server._daemon_post("/events", payload={"a": 1})

@@ -30,8 +30,10 @@ except ImportError:
 mcp = FastMCP("forgememo")
 
 DAEMON_URL = os.environ.get("FORGEMEMO_DAEMON_URL")
-SOCKET_PATH = os.environ.get("FORGEMEMO_SOCKET", os.path.join(tempfile.gettempdir(), "forgememo.sock"))
-HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT", "5555" if sys.platform == "win32" else None)
+SOCKET_PATH = os.environ.get(
+    "FORGEMEMO_SOCKET", os.path.join(tempfile.gettempdir(), "forgememo.sock")
+)
+HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT", "5555")
 
 
 def _socket_session():
@@ -70,7 +72,9 @@ def _daemon_get(path: str, params: dict | None = None) -> dict:
             socket_url = "http+unix://" + SOCKET_PATH.replace("/", "%2F")
             resp = session.get(f"{socket_url}{path}", params=params, timeout=5)
             if not resp.ok:
-                raise RuntimeError(f"daemon error {resp.status_code}: {resp.text[:200]}")
+                raise RuntimeError(
+                    f"daemon error {resp.status_code}: {resp.text[:200]}"
+                )
             return resp.json()
     if not DAEMON_URL and not HTTP_PORT:
         raise RuntimeError("daemon transport unavailable (no socket and no HTTP port)")
@@ -88,7 +92,9 @@ def _daemon_post(path: str, payload: dict) -> dict:
             socket_url = "http+unix://" + SOCKET_PATH.replace("/", "%2F")
             resp = session.post(f"{socket_url}{path}", json=payload, timeout=5)
             if not resp.ok:
-                raise RuntimeError(f"daemon error {resp.status_code}: {resp.text[:200]}")
+                raise RuntimeError(
+                    f"daemon error {resp.status_code}: {resp.text[:200]}"
+                )
             return resp.json()
     if not DAEMON_URL and not HTTP_PORT:
         raise RuntimeError("daemon transport unavailable (no socket and no HTTP port)")
@@ -99,7 +105,13 @@ def _daemon_post(path: str, payload: dict) -> dict:
     return resp.json()
 
 
-def _post_event_bg(event_type: str, tool_name: str | None, payload: dict, project_id: str, session_id: str = "mcp") -> None:
+def _post_event_bg(
+    event_type: str,
+    tool_name: str | None,
+    payload: dict,
+    project_id: str,
+    session_id: str = "mcp",
+) -> None:
     """Fire-and-forget: post a tool-use event to the daemon in a background thread."""
     body = {
         "session_id": session_id,
@@ -147,18 +159,24 @@ def session_sync(
 
     # Fetch recent context — same logic as hook.py _handle_session_recall.
     try:
-        summaries = _daemon_get("/session_summaries", {"project_id": project_id, "k": 2})
+        summaries = _daemon_get(
+            "/session_summaries", {"project_id": project_id, "k": 2}
+        )
     except Exception:
         summaries = {}
     try:
-        search = _daemon_get("/search", {"q": "recent", "project_id": project_id, "k": 5})
+        search = _daemon_get(
+            "/search", {"q": "recent", "project_id": project_id, "k": 5}
+        )
     except Exception:
         search = {}
 
     parts: list[str] = []
     for s in summaries.get("results", []):
         ts = (s.get("ts") or "")[:10]
-        parts.append(f"[Session {ts}] {s.get('request', '')} — {s.get('learnings', '')}")
+        parts.append(
+            f"[Session {ts}] {s.get('request', '')} — {s.get('learnings', '')}"
+        )
     for r in search.get("results", []):
         narrative = (r.get("narrative") or "")[:120]
         parts.append(f"[Memory] {r.get('title', '')}: {narrative}")
@@ -196,9 +214,13 @@ def search_memories(
 
     lines = []
     for r in results:
-        score = f" | score:{r['impact_score']}" if r.get("impact_score") is not None else ""
+        score = (
+            f" | score:{r['impact_score']}" if r.get("impact_score") is not None else ""
+        )
         date = (r.get("ts") or "")[:10]
-        lines.append(f"{r['id']} | {r.get('type','')} | {date}{score} | {r.get('title','')}")
+        lines.append(
+            f"{r['id']} | {r.get('type', '')} | {date}{score} | {r.get('title', '')}"
+        )
     return "\n".join(lines)
 
 
@@ -240,7 +262,7 @@ def get_memory_timeline(
     lines = []
     for r in data.get("timeline", []):
         date = (r.get("ts") or "")[:10]
-        lines.append(f"{r['id']} | {r.get('type','')} | {date} | {r.get('title','')}")
+        lines.append(f"{r['id']} | {r.get('type', '')} | {date} | {r.get('title', '')}")
     return "\n".join(lines)
 
 

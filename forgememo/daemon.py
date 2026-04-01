@@ -40,10 +40,14 @@ except Exception:
     make_server = None
 
 
-_DEFAULT_LOG_PATH = os.path.join(Path.home(), ".forgememo", "logs", "forgememo_daemon.log")
+_DEFAULT_LOG_PATH = os.path.join(
+    Path.home(), ".forgememo", "logs", "forgememo_daemon.log"
+)
 LOG_FILE = os.environ.get("FORGEMEMO_DAEMON_LOG", _DEFAULT_LOG_PATH)
-SOCKET_PATH = os.environ.get("FORGEMEMO_SOCKET", os.path.join(tempfile.gettempdir(), "forgememo.sock"))
-HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT", "5555" if sys.platform == "win32" else None)
+SOCKET_PATH = os.environ.get(
+    "FORGEMEMO_SOCKET", os.path.join(tempfile.gettempdir(), "forgememo.sock")
+)
+HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT", "5555")
 
 try:
     os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
@@ -115,7 +119,9 @@ def _insert_event(
         (session_id, project_id, source_tool, event_type, tool_name, payload, seq, h),
     )
     event_id = cur.lastrowid
-    conn.execute("INSERT INTO events_fts(rowid, payload) VALUES (?, ?)", (event_id, payload))
+    conn.execute(
+        "INSERT INTO events_fts(rowid, payload) VALUES (?, ?)", (event_id, payload)
+    )
     return event_id
 
 
@@ -151,7 +157,14 @@ def create_app() -> Flask:
     @app.route("/events", methods=["POST"])
     def post_event():
         data = request.get_json(silent=True) or {}
-        required = ["session_id", "project_id", "source_tool", "event_type", "payload", "seq"]
+        required = [
+            "session_id",
+            "project_id",
+            "source_tool",
+            "event_type",
+            "payload",
+            "seq",
+        ]
         missing = [k for k in required if k not in data or data[k] in (None, "")]
         if missing:
             return jsonify({"error": "missing_fields", "fields": missing}), 400
@@ -197,8 +210,17 @@ def create_app() -> Flask:
             conn = get_conn()
             try:
                 for data in items:
-                    required = ["session_id", "project_id", "source_tool", "event_type", "payload", "seq"]
-                    missing = [k for k in required if k not in data or data[k] in (None, "")]
+                    required = [
+                        "session_id",
+                        "project_id",
+                        "source_tool",
+                        "event_type",
+                        "payload",
+                        "seq",
+                    ]
+                    missing = [
+                        k for k in required if k not in data or data[k] in (None, "")
+                    ]
                     if missing:
                         results.append({"error": "missing_fields", "fields": missing})
                         continue
@@ -215,7 +237,12 @@ def create_app() -> Flask:
                         payload=payload,
                         seq=int(data["seq"]),
                     )
-                    results.append({"status": "duplicate" if event_id is None else "ok", "event_id": event_id})
+                    results.append(
+                        {
+                            "status": "duplicate" if event_id is None else "ok",
+                            "event_id": event_id,
+                        }
+                    )
                 conn.commit()
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower():
@@ -236,14 +263,18 @@ def create_app() -> Flask:
         project_id = request.args.get("project_id")
         type_filter = request.args.get("type")
         concepts_raw = request.args.get("concepts")
-        concepts = [c.strip() for c in concepts_raw.split(",")] if concepts_raw else None
+        concepts = (
+            [c.strip() for c in concepts_raw.split(",")] if concepts_raw else None
+        )
 
         # Sanitize query for FTS5: wrap each token in double quotes so
         # hyphens/special chars aren't interpreted as FTS operators.
         # Internal double quotes are escaped by doubling them per SQLite docs.
         def _fts5_safe(raw: str) -> str:
             tokens = raw.split()
-            return " ".join(f'"{t.replace(chr(34), chr(34)+chr(34))}"' for t in tokens if t)
+            return " ".join(
+                f'"{t.replace(chr(34), chr(34) + chr(34))}"' for t in tokens if t
+            )
 
         fts_q = _fts5_safe(q)
         if not fts_q:
@@ -376,14 +407,21 @@ def create_app() -> Flask:
 
             if concepts:
                 # Batch-fetch concepts for all d: results in one query
-                d_ids = [int(r["id"].split(":")[1]) for r in results if r["id"].startswith("d:")]
+                d_ids = [
+                    int(r["id"].split(":")[1])
+                    for r in results
+                    if r["id"].startswith("d:")
+                ]
                 if d_ids:
                     placeholders = ",".join("?" * len(d_ids))
                     concept_rows = conn.execute(
                         f"SELECT id, concepts FROM distilled_summaries WHERE id IN ({placeholders})",
                         d_ids,
                     ).fetchall()
-                    concept_map = {row["id"]: _json_load_list(row["concepts"]) for row in concept_rows}
+                    concept_map = {
+                        row["id"]: _json_load_list(row["concepts"])
+                        for row in concept_rows
+                    }
                 else:
                     concept_map = {}
 
@@ -431,22 +469,51 @@ def create_app() -> Flask:
                 "WHERE (ts < ? OR (ts = ? AND id < ?)) "
                 f"{proj_filter} "
                 "ORDER BY ts DESC, id DESC LIMIT ?",
-                ([anchor_ts, anchor_ts, anchor] + ([project_id] if project_id else []) + [depth_before]),
+                (
+                    [anchor_ts, anchor_ts, anchor]
+                    + ([project_id] if project_id else [])
+                    + [depth_before]
+                ),
             ).fetchall()
             after = conn.execute(
                 "SELECT id, ts, type, title FROM distilled_summaries "
                 "WHERE (ts > ? OR (ts = ? AND id > ?)) "
                 f"{proj_filter} "
                 "ORDER BY ts ASC, id ASC LIMIT ?",
-                ([anchor_ts, anchor_ts, anchor] + ([project_id] if project_id else []) + [depth_after]),
+                (
+                    [anchor_ts, anchor_ts, anchor]
+                    + ([project_id] if project_id else [])
+                    + [depth_after]
+                ),
             ).fetchall()
 
             items = []
             for r in reversed(before):
-                items.append({"id": f"d:{r['id']}", "ts": r["ts"], "type": r["type"], "title": r["title"]})
-            items.append({"id": f"d:{anchor_row['id']}", "ts": anchor_row["ts"], "type": anchor_row["type"], "title": anchor_row["title"]})
+                items.append(
+                    {
+                        "id": f"d:{r['id']}",
+                        "ts": r["ts"],
+                        "type": r["type"],
+                        "title": r["title"],
+                    }
+                )
+            items.append(
+                {
+                    "id": f"d:{anchor_row['id']}",
+                    "ts": anchor_row["ts"],
+                    "type": anchor_row["type"],
+                    "title": anchor_row["title"],
+                }
+            )
             for r in after:
-                items.append({"id": f"d:{r['id']}", "ts": r["ts"], "type": r["type"], "title": r["title"]})
+                items.append(
+                    {
+                        "id": f"d:{r['id']}",
+                        "ts": r["ts"],
+                        "type": r["type"],
+                        "title": r["title"],
+                    }
+                )
 
             return jsonify({"timeline": items})
         finally:
@@ -647,7 +714,9 @@ def main():
         GracefulShutdown()
 
         if make_server is None:
-            logger.error("Werkzeug server unavailable. Install werkzeug (via flask) to run.")
+            logger.error(
+                "Werkzeug server unavailable. Install werkzeug (via flask) to run."
+            )
             sys.exit(1)
 
         if sys.platform == "win32":
@@ -678,11 +747,18 @@ def main():
                 else:
                     logger.info(f"Starting HTTP server on 127.0.0.1:{port}...")
                     http_server = make_server("127.0.0.1", port, app, threaded=True)
-                    threading.Thread(target=http_server.serve_forever, daemon=True).start()
+                    threading.Thread(
+                        target=http_server.serve_forever, daemon=True
+                    ).start()
 
-            logger.info("Health check (socket): curl --unix-socket %s http://localhost/health", SOCKET_PATH)
+            logger.info(
+                "Health check (socket): curl --unix-socket %s http://localhost/health",
+                SOCKET_PATH,
+            )
             if HTTP_PORT:
-                logger.info("Health check (http): curl http://127.0.0.1:%s/health", HTTP_PORT)
+                logger.info(
+                    "Health check (http): curl http://127.0.0.1:%s/health", HTTP_PORT
+                )
 
             socket_server.serve_forever()
     except Exception as e:

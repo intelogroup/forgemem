@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-01
+
+### Cross-agent session hooks
+- Hook adapter now handles all five agent platforms: `SessionStart`/`SessionEnd` (Claude Code), `UserPromptSubmit`/`Stop` (Codex), `BeforeAgent`/`AfterAgent` (Gemini), `sessionStart`/`agentStop` (Copilot), `session.created`/`session.idle`/`session.deleted` (OpenCode)
+- `_SESSION_RECALL_EVENTS` and `_SESSION_END_EVENTS` dispatch sets cover every variant — no per-agent configuration needed in hook.py
+- `PostToolUse` / `AfterTool` (Gemini) / `tool.done` (OpenCode) now captured and posted to daemon
+
+### HTTP-first transport (Windows compatibility)
+- `FORGEMEMO_HTTP_PORT` defaults to `"5555"` on all platforms; previous conditional `None` on POSIX caused Windows CI to fail with "daemon transport unavailable"
+- Socket-first path preserved on POSIX (`requests-unixsocket`) with HTTP fallback; Windows skips socket entirely
+- `FORGEMEMO_DAEMON_URL` env var allows full URL override for any transport scenario
+
+### CLI refactored into commands/ subpackage
+- `cli.py` split into `forgememo/commands/` for maintainability; entry point and public API unchanged
+- `api.py` deleted; concurrent-write tests migrated to daemon + storage layer directly
+
+### Daemon self-heal
+- `_ensure_daemon()` in hook adapter auto-restarts the daemon if unreachable, then polls up to 5s before giving up
+- Session recall emits an actionable message (`"run: forgememo start"`) rather than silently failing when daemon is down
+
+### Test coverage
+- Full hook test suite: 81 tests covering `strip_private`, `_normalize_event`, `_format_context_json`, `_read_stdin_json`, `_post_event` transport paths, `_daemon_get` socket/HTTP/error paths, session recall (narrative truncation, multi-summary, per-tool format), session end (POSIX/Windows, missing binary, missing cwd), `main()` error exits, and parametrized dispatch for every cross-agent event name
+
 ## [0.2.10] — 2026-03-31
 
 - Ensure Claude Code hooks are idempotently registered via `forgememo init`, which now writes `forgememo hook UserPromptSubmit`/`Stop` into `~/.claude/settings.json` and exposes a hidden `forgememo hook` CLI entry so the hook payload can run without embedding hardcoded paths.

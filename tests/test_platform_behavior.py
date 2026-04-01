@@ -366,6 +366,10 @@ class TestSessionRecall:
 
 
 class TestSessionEnd:
+    @pytest.fixture(autouse=True)
+    def _daemon_up(self, monkeypatch):
+        monkeypatch.setattr(hook, "_ensure_daemon", lambda: True)
+
     def test_spawns_background_process(self, monkeypatch, capsys):
         spawned = []
 

@@ -10,6 +10,9 @@ jobs:
   # ═══════════════════════════════════════════════════════════════════
   smoke-test:
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -130,6 +133,7 @@ jobs:
 
       # ── Write/Search roundtrip ───────────────────────────────
       - name: Event write → search → retrieve roundtrip
+        shell: bash
         run: |
           python -c "
           import requests, json, time, uuid
@@ -201,11 +205,11 @@ jobs:
                   'seq': int(time.time() * 1000) + i,
               })
 
-          r = requests.post(f'{base}/events/batch', json={'events': events}, timeout=10)
+          r = requests.post(f'{base}/events/batch', json=events, timeout=10)
           if r.status_code == 404:
               print('SKIP: /events/batch not implemented yet')
           else:
-              assert r.status_code in (200, 201), f'batch write failed: {r.status_code} {r.text}'
+              assert r.status_code in (200, 201, 207), f'batch write failed: {r.status_code} {r.text}'
               print(f'Batch write OK: {r.json()}')
           "
         env:

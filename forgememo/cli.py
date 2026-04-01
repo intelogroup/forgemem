@@ -1065,10 +1065,45 @@ def status(
         else f"[yellow]{CROSS} not registered[/]  → run: [cyan]forgememo init[/]",
     )
 
-    skills_str = "  ".join(
-        f"[green]{a} {CHECK}[/]" if ok else f"[dim]{a} {CROSS}[/]"
-        for a, ok in skills_status.items()
+    # Check for stale skill files by comparing version headers
+    def _skill_version(path: Path) -> int | None:
+        if not path.exists():
+            return None
+        try:
+            first_line = path.read_text().splitlines()[0]
+            if "version" in first_line.lower():
+                import re
+                m = re.search(r"(\d+)", first_line)
+                return int(m.group(1)) if m else None
+        except Exception:
+            pass
+        return None
+
+    def _template_version(agent: str) -> int | None:
+        ext = "json" if agent == "codex" else "md"
+        t = SKILL_TEMPLATES_DIR / f"{agent}.{ext}"
+        return _skill_version(t)
+
+    skills_parts = []
+    for a, ok in skills_status.items():
+        if ok:
+            installed_v = _skill_version(SKILL_PATHS[a])
+            template_v = _template_version(a)
+            if installed_v is not None and template_v is not None and installed_v < template_v:
+                skills_parts.append(f"[yellow]{a} {CHECK} (v{installed_v}→v{template_v})[/]")
+            else:
+                skills_parts.append(f"[green]{a} {CHECK}[/]")
+        else:
+            skills_parts.append(f"[dim]{a} {CROSS}[/]")
+    skills_str = "  ".join(skills_parts)
+    stale_skills = any(
+        skills_status[a] and _skill_version(SKILL_PATHS[a]) is not None
+        and _template_version(a) is not None
+        and _skill_version(SKILL_PATHS[a]) < _template_version(a)
+        for a in skills_status
     )
+    if stale_skills:
+        skills_str += "  → run: [cyan]forgememo skill update[/]"
     table.add_row("Skills", skills_str)
 
     # Daemon / service status — check both install state and live socket
@@ -1376,6 +1411,46 @@ def store(
         tags=None,
     )
     cmd_save(args)
+
+
+@app.command()
+def logs(
+    lines: int = typer.Option(50, "--lines", "-n", help="Number of lines to show"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output (like tail -f)"),
+    worker: bool = typer.Option(False, "--worker", help="Show worker logs instead of daemon"),
+):
+    """Tail the daemon or worker log file."""
+    log_dir = Path.home() / ".forgememo" / "logs"
+
+    if worker:
+        log_file = log_dir / "forgememo_worker.log"
+    else:
+        log_file = log_dir / "forgememo_daemon.log"
+
+    if not log_file.exists():
+        console.print(f"[yellow]Log file not found:[/] {log_file}")
+        console.print("[dim]Start the daemon first: forgememo start[/]")
+        raise typer.Exit(1)
+
+    if follow:
+        console.print(f"[dim]Following {log_file} (Ctrl+C to stop)...[/]")
+        try:
+            proc = subprocess.run(
+                ["tail", "-f", "-n", str(lines), str(log_file)] if sys.platform != "win32"
+                else ["powershell", "-Command", f"Get-Content -Path '{log_file}' -Tail {lines} -Wait"],
+                check=False,
+            )
+        except KeyboardInterrupt:
+            pass
+    else:
+        try:
+            text = log_file.read_text(errors="replace")
+            tail = text.splitlines()[-lines:]
+            for line in tail:
+                console.print(line)
+        except Exception as e:
+            console.print(f"[red]error:[/] {e}")
+            raise typer.Exit(1)
 
 
 @app.command()
@@ -2003,6 +2078,8 @@ def help():
             f"  [cyan]forgememo export-context[/]   {_D} write agent context block (CLAUDE.md / AGENTS.md)\n\n"
             "[bold]Management:[/]\n"
             f"  [cyan]forgememo status[/]            {_D} DB stats, server health, skill status\n"
+            f"  [cyan]forgememo doctor[/]            {_D} end-to-end self-test (DB, daemon, write/search)\n"
+            f"  [cyan]forgememo logs[/]              {_D} tail daemon logs (--follow, --worker)\n"
             f"  [cyan]forgememo config[/]            {_D} set/view inference provider & model\n"
             f"  [cyan]forgememo auth[/]              {_D} login / logout / check API key status\n"
             f"  [cyan]forgememo skill generate[/]    {_D} regenerate agent skill files\n"

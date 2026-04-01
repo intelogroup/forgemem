@@ -20,8 +20,10 @@ import requests
 
 
 DAEMON_URL = os.environ.get("FORGEMEMO_DAEMON_URL")
-SOCKET_PATH = os.environ.get("FORGEMEMO_SOCKET", os.path.join(tempfile.gettempdir(), "forgememo.sock"))
-HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT", "5555" if sys.platform == "win32" else None)
+SOCKET_PATH = os.environ.get(
+    "FORGEMEMO_SOCKET", os.path.join(tempfile.gettempdir(), "forgememo.sock")
+)
+HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT", "5555")
 SOURCE_TOOL = os.environ.get("FORGEMEMO_SOURCE_TOOL", "unknown")
 
 _PRIVATE_RE = None
@@ -123,6 +125,7 @@ def _daemon_get(path: str, params: dict | None = None) -> dict:
     if not DAEMON_URL and sys.platform != "win32":
         try:
             import requests_unixsocket
+
             session = requests_unixsocket.Session()
             socket_url = "http+unix://" + SOCKET_PATH.replace("/", "%2F")
             resp = session.get(f"{socket_url}{path}", params=params, timeout=3)
@@ -146,12 +149,14 @@ def _daemon_get(path: str, params: dict | None = None) -> dict:
 def _format_context_json(text: str, event_name: str) -> str:
     """Return platform-appropriate JSON for context injection."""
     if SOURCE_TOOL in ("claude-code", "gemini"):
-        return json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": event_name,
-                "additionalContext": text,
+        return json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": event_name,
+                    "additionalContext": text,
+                }
             }
-        })
+        )
     return json.dumps({"systemMessage": text})
 
 
@@ -164,7 +169,9 @@ def _handle_session_recall(payload: dict, event_name: str) -> int:
     parts = []
     for s in summaries.get("results", []):
         ts = (s.get("ts") or "")[:10]
-        parts.append(f"[Session {ts}] {s.get('request', '')} — {s.get('learnings', '')}")
+        parts.append(
+            f"[Session {ts}] {s.get('request', '')} — {s.get('learnings', '')}"
+        )
     for r in search.get("results", []):
         narrative = (r.get("narrative") or "")[:120]
         parts.append(f"[Memory] {r.get('title', '')}: {narrative}")
@@ -183,22 +190,34 @@ def _handle_session_end(payload: dict) -> int:
     session_id = payload.get("session_id") or ""
     cwd = payload.get("cwd") or os.getcwd()
     import shutil as _shutil
+
     forgememo_bin = _shutil.which("forgememo")
     if not forgememo_bin:
         print(json.dumps({}))
         return 0
-    cmd = [forgememo_bin, "end-session", "--session-id", session_id, "--project-dir", cwd]
+    cmd = [
+        forgememo_bin,
+        "end-session",
+        "--session-id",
+        session_id,
+        "--project-dir",
+        cwd,
+    ]
     try:
         if sys.platform == "win32":
             env = {**os.environ, "FORGEMEMO_HTTP_PORT": HTTP_PORT or "5555"}
             subprocess.Popen(
-                cmd, env=env,
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                cmd,
+                env=env,
+                creationflags=subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP,
             )
         else:
             subprocess.Popen(
-                cmd, start_new_session=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                cmd,
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
     except Exception:
         pass
@@ -212,19 +231,19 @@ def _handle_session_end(payload: dict) -> int:
 
 _SESSION_RECALL_EVENTS = {
     "UserPromptSubmit",  # Claude Code, Codex
-    "BeforeAgent",       # Gemini
-    "sessionStart",      # Copilot
-    "session.created",   # OpenCode
-    "SessionStart",      # generic
+    "BeforeAgent",  # Gemini
+    "sessionStart",  # Copilot
+    "session.created",  # OpenCode
+    "SessionStart",  # generic
 }
 
 _SESSION_END_EVENTS = {
-    "Stop",              # Claude Code, Codex
-    "SessionEnd",        # Claude Code, Gemini
-    "AfterAgent",        # Gemini (per-turn fallback)
-    "agentStop",         # Copilot
-    "session.idle",      # OpenCode (agent finished)
-    "session.deleted",   # OpenCode (session closed)
+    "Stop",  # Claude Code, Codex
+    "SessionEnd",  # Claude Code, Gemini
+    "AfterAgent",  # Gemini (per-turn fallback)
+    "agentStop",  # Copilot
+    "session.idle",  # OpenCode (agent finished)
+    "session.deleted",  # OpenCode (session closed)
 }
 
 

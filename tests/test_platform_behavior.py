@@ -77,6 +77,7 @@ def test_config_get_ollama_url_env(monkeypatch):
 # Socket path defaults use tempfile.gettempdir(), not hardcoded /tmp
 # ---------------------------------------------------------------------------
 
+
 def test_mcp_server_socket_path_default_uses_tempdir(monkeypatch):
     monkeypatch.delenv("FORGEMEMO_SOCKET", raising=False)
     importlib.reload(mcp_server)
@@ -98,14 +99,15 @@ def test_mcp_server_socket_path_env_override(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# HTTP_PORT defaults: None on POSIX, "5555" on Windows
+# HTTP_PORT defaults: "5555" on all platforms (HTTP-first)
 # ---------------------------------------------------------------------------
+
 
 def test_mcp_server_http_port_default_posix(monkeypatch):
     monkeypatch.delenv("FORGEMEMO_HTTP_PORT", raising=False)
     monkeypatch.setattr(sys, "platform", "linux")
     importlib.reload(mcp_server)
-    assert mcp_server.HTTP_PORT is None
+    assert mcp_server.HTTP_PORT == "5555"
 
 
 def test_mcp_server_http_port_default_windows(monkeypatch):
@@ -119,7 +121,7 @@ def test_hook_http_port_default_posix(monkeypatch):
     monkeypatch.delenv("FORGEMEMO_HTTP_PORT", raising=False)
     monkeypatch.setattr(sys, "platform", "linux")
     importlib.reload(hook)
-    assert hook.HTTP_PORT is None
+    assert hook.HTTP_PORT == "5555"
 
 
 def test_hook_http_port_default_windows(monkeypatch):
@@ -140,6 +142,7 @@ def test_http_port_env_overrides_windows_default(monkeypatch):
 # hook._post_event: socket skipped on Windows, HTTP used
 # ---------------------------------------------------------------------------
 
+
 def test_post_event_skips_socket_on_windows(monkeypatch):
     """On Windows, _post_event must not attempt unix socket — HTTP only."""
     http_calls = []
@@ -153,8 +156,13 @@ def test_post_event_skips_socket_on_windows(monkeypatch):
     monkeypatch.setattr(hook.requests, "post", fake_post)
 
     event = {
-        "session_id": "s1", "project_id": "/p", "source_tool": "test",
-        "event_type": "evt", "tool_name": None, "payload": "{}", "seq": 1,
+        "session_id": "s1",
+        "project_id": "/p",
+        "source_tool": "test",
+        "event_type": "evt",
+        "tool_name": None,
+        "payload": "{}",
+        "seq": 1,
     }
     hook._post_event(event)
 
@@ -176,13 +184,19 @@ def test_post_event_uses_socket_on_posix(monkeypatch):
 
     # Patch requests_unixsocket at the hook module level via monkeypatching the import
     import unittest.mock as mock
+
     fake_module = mock.MagicMock()
     fake_module.Session.return_value = _FakeSession()
     monkeypatch.setitem(sys.modules, "requests_unixsocket", fake_module)
 
     event = {
-        "session_id": "s1", "project_id": "/p", "source_tool": "test",
-        "event_type": "evt", "tool_name": None, "payload": "{}", "seq": 1,
+        "session_id": "s1",
+        "project_id": "/p",
+        "source_tool": "test",
+        "event_type": "evt",
+        "tool_name": None,
+        "payload": "{}",
+        "seq": 1,
     }
     hook._post_event(event)
 
@@ -194,19 +208,28 @@ def test_post_event_uses_socket_on_posix(monkeypatch):
 # Session recall hook: _handle_session_recall
 # ---------------------------------------------------------------------------
 
+
 class TestSessionRecall:
     def _fake_daemon_get(self, responses: dict):
         """Return a _daemon_get replacement that returns preset responses."""
+
         def _get(path, params=None):
             return responses.get(path, {})
+
         return _get
 
     def test_empty_db_outputs_empty_context(self, monkeypatch, capsys):
         """Empty DB should emit hookSpecificOutput with empty additionalContext."""
-        monkeypatch.setattr(hook, "_daemon_get", self._fake_daemon_get({
-            "/session_summaries": {"results": []},
-            "/search": {"results": []},
-        }))
+        monkeypatch.setattr(
+            hook,
+            "_daemon_get",
+            self._fake_daemon_get(
+                {
+                    "/session_summaries": {"results": []},
+                    "/search": {"results": []},
+                }
+            ),
+        )
         monkeypatch.setattr(hook, "SOURCE_TOOL", "claude-code")
         rc = hook._handle_session_recall({"cwd": "/proj"}, "UserPromptSubmit")
         out = capsys.readouterr().out
@@ -216,12 +239,24 @@ class TestSessionRecall:
         assert data["hookSpecificOutput"]["additionalContext"] == ""
 
     def test_with_memories_outputs_additional_context_claude(self, monkeypatch, capsys):
-        monkeypatch.setattr(hook, "_daemon_get", self._fake_daemon_get({
-            "/session_summaries": {"results": [
-                {"ts": "2026-01-01T00:00:00", "request": "Fix auth bug", "learnings": "JWT expiry was wrong"}
-            ]},
-            "/search": {"results": []},
-        }))
+        monkeypatch.setattr(
+            hook,
+            "_daemon_get",
+            self._fake_daemon_get(
+                {
+                    "/session_summaries": {
+                        "results": [
+                            {
+                                "ts": "2026-01-01T00:00:00",
+                                "request": "Fix auth bug",
+                                "learnings": "JWT expiry was wrong",
+                            }
+                        ]
+                    },
+                    "/search": {"results": []},
+                }
+            ),
+        )
         monkeypatch.setattr(hook, "SOURCE_TOOL", "claude-code")
         hook._handle_session_recall({"cwd": "/proj"}, "UserPromptSubmit")
         out = capsys.readouterr().out
@@ -231,12 +266,24 @@ class TestSessionRecall:
         assert "Fix auth bug" in data["hookSpecificOutput"]["additionalContext"]
 
     def test_with_memories_outputs_additional_context_gemini(self, monkeypatch, capsys):
-        monkeypatch.setattr(hook, "_daemon_get", self._fake_daemon_get({
-            "/session_summaries": {"results": [
-                {"ts": "2026-01-01T00:00:00", "request": "Refactor DB", "learnings": "Use transactions"}
-            ]},
-            "/search": {"results": []},
-        }))
+        monkeypatch.setattr(
+            hook,
+            "_daemon_get",
+            self._fake_daemon_get(
+                {
+                    "/session_summaries": {
+                        "results": [
+                            {
+                                "ts": "2026-01-01T00:00:00",
+                                "request": "Refactor DB",
+                                "learnings": "Use transactions",
+                            }
+                        ]
+                    },
+                    "/search": {"results": []},
+                }
+            ),
+        )
         monkeypatch.setattr(hook, "SOURCE_TOOL", "gemini")
         hook._handle_session_recall({"cwd": "/proj"}, "BeforeAgent")
         out = capsys.readouterr().out
@@ -245,12 +292,24 @@ class TestSessionRecall:
         assert "Refactor DB" in data["hookSpecificOutput"]["additionalContext"]
 
     def test_with_memories_outputs_system_message_codex(self, monkeypatch, capsys):
-        monkeypatch.setattr(hook, "_daemon_get", self._fake_daemon_get({
-            "/session_summaries": {"results": [
-                {"ts": "2026-01-01T00:00:00", "request": "Add tests", "learnings": "Use pytest fixtures"}
-            ]},
-            "/search": {"results": []},
-        }))
+        monkeypatch.setattr(
+            hook,
+            "_daemon_get",
+            self._fake_daemon_get(
+                {
+                    "/session_summaries": {
+                        "results": [
+                            {
+                                "ts": "2026-01-01T00:00:00",
+                                "request": "Add tests",
+                                "learnings": "Use pytest fixtures",
+                            }
+                        ]
+                    },
+                    "/search": {"results": []},
+                }
+            ),
+        )
         monkeypatch.setattr(hook, "SOURCE_TOOL", "codex")
         hook._handle_session_recall({"cwd": "/proj"}, "UserPromptSubmit")
         out = capsys.readouterr().out
@@ -260,12 +319,23 @@ class TestSessionRecall:
         assert "Add tests" in data["systemMessage"]
 
     def test_search_results_included(self, monkeypatch, capsys):
-        monkeypatch.setattr(hook, "_daemon_get", self._fake_daemon_get({
-            "/session_summaries": {"results": []},
-            "/search": {"results": [
-                {"title": "Auth pattern", "narrative": "Always validate JWT on the server side"}
-            ]},
-        }))
+        monkeypatch.setattr(
+            hook,
+            "_daemon_get",
+            self._fake_daemon_get(
+                {
+                    "/session_summaries": {"results": []},
+                    "/search": {
+                        "results": [
+                            {
+                                "title": "Auth pattern",
+                                "narrative": "Always validate JWT on the server side",
+                            }
+                        ]
+                    },
+                }
+            ),
+        )
         monkeypatch.setattr(hook, "SOURCE_TOOL", "claude-code")
         hook._handle_session_recall({"cwd": "/proj"}, "UserPromptSubmit")
         out = capsys.readouterr().out
@@ -287,6 +357,7 @@ class TestSessionRecall:
 # Session end hook: _handle_session_end
 # ---------------------------------------------------------------------------
 
+
 class TestSessionEnd:
     def test_spawns_background_process(self, monkeypatch, capsys):
         spawned = []
@@ -295,6 +366,7 @@ class TestSessionEnd:
             spawned.append(cmd)
 
         import shutil as _shutil
+
         monkeypatch.setattr(_shutil, "which", lambda _: "/usr/bin/forgememo")
         monkeypatch.setattr(hook.subprocess, "Popen", fake_popen)
         monkeypatch.setattr(sys, "platform", "linux")
@@ -310,6 +382,7 @@ class TestSessionEnd:
     def test_missing_forgememo_bin_returns_empty_json(self, monkeypatch, capsys):
         """No forgememo binary → return {} (Claude Code ignores empty JSON)."""
         import shutil as _shutil
+
         monkeypatch.setattr(_shutil, "which", lambda _: None)
         rc = hook._handle_session_end({"session_id": "abc", "cwd": "/proj"})
         out = capsys.readouterr().out
@@ -319,8 +392,13 @@ class TestSessionEnd:
     def test_popen_failure_returns_empty_json(self, monkeypatch, capsys):
         """Popen failure → swallow exception and return {} gracefully."""
         import shutil as _shutil
+
         monkeypatch.setattr(_shutil, "which", lambda _: "/usr/bin/forgememo")
-        monkeypatch.setattr(hook.subprocess, "Popen", lambda *a, **kw: (_ for _ in ()).throw(OSError("no such file")))
+        monkeypatch.setattr(
+            hook.subprocess,
+            "Popen",
+            lambda *a, **kw: (_ for _ in ()).throw(OSError("no such file")),
+        )
         monkeypatch.setattr(sys, "platform", "linux")
         rc = hook._handle_session_end({"session_id": "abc", "cwd": "/proj"})
         out = capsys.readouterr().out
@@ -332,15 +410,18 @@ class TestSessionEnd:
 # main() dispatch: session event routing
 # ---------------------------------------------------------------------------
 
+
 class TestMainDispatch:
     """Verify main() routes session events to the correct handler."""
 
     def test_user_prompt_submit_dispatched_to_recall(self, monkeypatch, capsys):
         recalled = []
-        monkeypatch.setattr(hook, "_handle_session_recall",
-                            lambda p, e: recalled.append(e) or 0)
+        monkeypatch.setattr(
+            hook, "_handle_session_recall", lambda p, e: recalled.append(e) or 0
+        )
         monkeypatch.setattr(sys, "stdin", __import__("io").StringIO('{"cwd":"/p"}'))
         import unittest.mock as mock
+
         with mock.patch("sys.argv", ["hook.py", "UserPromptSubmit"]):
             rc = hook.main()
         assert rc == 0
@@ -348,10 +429,12 @@ class TestMainDispatch:
 
     def test_stop_dispatched_to_session_end(self, monkeypatch, capsys):
         ended = []
-        monkeypatch.setattr(hook, "_handle_session_end",
-                            lambda p: ended.append(True) or 0)
+        monkeypatch.setattr(
+            hook, "_handle_session_end", lambda p: ended.append(True) or 0
+        )
         monkeypatch.setattr(sys, "stdin", __import__("io").StringIO('{"cwd":"/p"}'))
         import unittest.mock as mock
+
         with mock.patch("sys.argv", ["hook.py", "Stop"]):
             rc = hook.main()
         assert rc == 0
@@ -360,9 +443,15 @@ class TestMainDispatch:
     def test_pre_tool_use_dispatched_to_post_event(self, monkeypatch, capsys):
         posted = []
         monkeypatch.setattr(hook, "_post_event", lambda e: posted.append(e))
-        monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(
-            '{"session_id":"s","project_id":"/p","source_tool":"t","seq":1}'))
+        monkeypatch.setattr(
+            sys,
+            "stdin",
+            __import__("io").StringIO(
+                '{"session_id":"s","project_id":"/p","source_tool":"t","seq":1}'
+            ),
+        )
         import unittest.mock as mock
+
         with mock.patch("sys.argv", ["hook.py", "PreToolUse"]):
             rc = hook.main()
         assert rc == 0

@@ -48,6 +48,18 @@ def test_routes_to_forgememo_managed(monkeypatch):
     assert out == "ok"
 
 
+def test_routes_to_claude_code(monkeypatch):
+    monkeypatch.setattr("forgememo.inference.cfg.get_provider", lambda: "claude_code")
+    monkeypatch.setattr("forgememo.inference.cfg.get_model", lambda _p: "claude_code")
+    monkeypatch.setattr(
+        "forgememo.inference._call_claude_code",
+        lambda prompt, max_tokens, model: f"cc:{prompt}",
+    )
+
+    out = inference.call("test", max_tokens=10)
+    assert out == "cc:test"
+
+
 def test_unknown_provider_exits(monkeypatch):
     monkeypatch.setattr("forgememo.inference.cfg.get_provider", lambda: "unknown")
     monkeypatch.setattr("forgememo.inference.cfg.get_model", lambda _p: "x")

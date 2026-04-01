@@ -449,16 +449,19 @@ jobs:
 
       - name: Init forgememo in container
         run: |
-          mkdir -p /root/.claude /root/.gemini /root/.codex
-          echo '{}' > /root/.claude/settings.json
-          forgememo init --yes --provider claude_code 2>&1 || {
-            echo "Init failed with exit code $?"
-            echo "Trying with TERM=dumb..."
-            TERM=dumb forgememo init --yes --provider claude_code 2>&1
-          }
+          set -ex
+          which python && python --version
+          echo "HOME=$HOME"
+          ls -la "$HOME/" || true
+          mkdir -p "$HOME/.claude" "$HOME/.gemini" "$HOME/.codex"
+          echo '{}' > "$HOME/.claude/settings.json"
+          python -c "import forgememo; print(f'forgememo {forgememo.__version__}')"
+          python -c "from forgememo.cli import app; print('CLI import OK')"
+          forgememo init --yes --provider claude_code
           echo "Init OK"
         env:
           TERM: dumb
+          PYTHONUNBUFFERED: "1"
 
       - name: Start daemon and verify health in container
         run: |

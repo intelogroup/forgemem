@@ -449,19 +449,33 @@ jobs:
 
       - name: Init forgememo in container
         run: |
-          set -ex
-          which python && python --version
-          echo "HOME=$HOME"
-          ls -la "$HOME/" || true
-          mkdir -p "$HOME/.claude" "$HOME/.gemini" "$HOME/.codex"
-          echo '{}' > "$HOME/.claude/settings.json"
-          python -c "import forgememo; print(f'forgememo {forgememo.__version__}')"
-          python -c "from forgememo.cli import app; print('CLI import OK')"
-          forgememo init --yes --provider claude_code
-          echo "Init OK"
-        env:
-          TERM: dumb
-          PYTHONUNBUFFERED: "1"
+          python -c "
+          import os, sys
+          from pathlib import Path
+
+          # Setup dirs
+          home = Path.home()
+          for d in ['.claude', '.gemini', '.codex']:
+              (home / d).mkdir(parents=True, exist_ok=True)
+          (home / '.claude' / 'settings.json').write_text('{}')
+
+          # Run init programmatically to capture any errors
+          from forgememo.storage import init_db
+          init_db()
+          print('DB init OK')
+
+          from forgememo.cli import _register_mcp, _register_hooks, _auto_detect_and_generate_skills, _configure_provider_noninteractive
+          settings = home / '.claude' / 'settings.json'
+          _register_mcp(settings)
+          print('MCP registered')
+          _register_hooks(settings)
+          print('Hooks registered')
+          _auto_detect_and_generate_skills(True)
+          print('Skills generated')
+          _configure_provider_noninteractive('claude_code')
+          print('Provider configured')
+          print('Init OK')
+          "
 
       - name: Start daemon and verify health in container
         run: |

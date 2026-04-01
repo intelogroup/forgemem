@@ -78,19 +78,9 @@ def _prompt_provider_setup(yes: bool, force: bool = False) -> None:
         return
 
     if yes or not sys.stdin.isatty():
-        from rich.panel import Panel
-
         console.print(
-            Panel(
-                "[bold yellow]Interactive provider setup is required on first run.[/]\n\n"
-                "Re-run [cyan]forgememo init[/] in a real terminal to choose your provider.\n"
-                "Agents and non-TTY sessions cannot bypass this step.\n\n"
-                "If you already configured a provider earlier, run:\n"
-                "  [cyan]forgememo start[/]",
-                title="[bold red]INTERACTIVE SETUP REQUIRED[/]",
-                border_style="red",
-                expand=False,
-            )
+            "Provider picker requires a real terminal.\n"
+            "Ask the user to run:  [cyan]forgememo config -i[/]"
         )
         return
 
@@ -618,7 +608,7 @@ def status(
                 f"[bold]Scheduled runs have stopped \u2014 inference credits exhausted.[/]\n\n"
                 f"Balance: [red]${flag['balance_usd']}[/]  \u00b7  Last failed: {flag['ts'][:10]}\n\n"
                 f"  Add credits \u2192 [cyan]https://forgememo.com/billing[/]\n"
-                f"  Or switch provider \u2192 [cyan]forgememo config provider anthropic --key sk-ant-...[/]",
+                f"  Or switch provider \u2192 [cyan]forgememo config -i[/]",
                 title="[bold red]ACTION REQUIRED \u2014 credits exhausted[/]",
                 border_style="red",
                 expand=False,
@@ -687,12 +677,12 @@ def status(
         else str(undistilled)
     )
     table.add_row("Undistilled", undistilled_val)
-    table.add_row(
-        "Provider",
-        f"[green]{provider}[/]"
+    provider_val = (
+        f"[green]{provider}[/]  [dim](switch: forgememo config -i)[/]"
         if provider != "not set"
-        else "[yellow]not set[/]  \u2192 run: [cyan]forgememo config[/]",
+        else "[yellow]not set[/]  \u2192 run: [cyan]forgememo config -i[/]"
     )
+    table.add_row("Provider", provider_val)
     table.add_row(
         "MCP",
         f"[green]{CHECK} registered[/]"

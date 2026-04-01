@@ -1,4 +1,4 @@
-# forgememo-skill-version: 4
+# forgememo-skill-version: 5
 # Forgememo Memory Skill
 
 You have access to Forgememo, your persistent long-term memory across sessions and projects.
@@ -65,6 +65,19 @@ get_memory_details(ids=["d:1","s:3"], workspace_root="<repo-path>")
 ```
 forgememo mine
 ```
+
+## Switching Providers
+
+If the user asks to switch their inference provider (e.g. from ollama to claude_code, or to forgememo):
+
+Run this in bash:
+```bash
+forgememo config -i
+```
+This will print: "Provider picker requires a real terminal. Ask the user to run: forgememo config -i"
+
+Relay that to the user — they run it in their terminal and pick from the menu themselves.
+Available providers: `forgememo` · `claude_code` · `ollama` · `anthropic` · `openai` · `gemini`
 
 ## Principles
 

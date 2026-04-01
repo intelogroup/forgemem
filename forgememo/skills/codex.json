@@ -1,5 +1,5 @@
 {
-  "forgemem_skill_version": 3,
+  "forgemem_skill_version": 4,
   "description": "Forgememo persistent memory tools for AI agents",
   "setup": {
     "first_time": {
@@ -13,6 +13,12 @@
       "commands": ["forgememo start"],
       "note": "Run after a reboot or if any MCP tool returns 'Daemon unreachable'. Then retry the MCP call."
     }
+  },
+  "switch_provider": {
+    "description": "If the user asks to switch inference provider, run `forgememo config -i` in bash. It will print a message asking the user to run the command in their terminal. Relay that message — the user picks the provider themselves from the interactive menu.",
+    "command": "forgememo config -i",
+    "available_providers": ["forgememo", "claude_code", "ollama", "anthropic", "openai", "gemini"],
+    "note": "This requires a real terminal (TTY). The agent runs the command to get the relay message; the user runs it in their terminal to interact."
   },
   "tools": [
     {

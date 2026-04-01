@@ -208,11 +208,13 @@ def config(
         None, "--ollama-url", help="Ollama base URL (default: http://localhost:11434)"
     ),
     show: bool = typer.Option(False, "--show", help="Print current config (masks keys)"),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="Open interactive provider picker"),
 ):
     """Configure AI provider and API keys.
 
     Examples:\n
       forgememo config                                    # show current config\n
+      forgememo config -i                                 # interactive picker — switch provider anytime\n
       forgememo config anthropic --key sk-ant-...         # set provider + key\n
       forgememo config openai --key sk-...                # switch to OpenAI\n
       forgememo config gemini --key AIza...               # switch to Gemini\n
@@ -225,6 +227,10 @@ def config(
     from rich.table import Table
     from forgememo import config as fm_cfg
     from forgememo.commands.lifecycle import _prompt_provider_setup
+
+    if interactive:
+        _prompt_provider_setup(yes=False, force=True)
+        return
 
     if provider is None or provider == "show" or show:
         provider = None

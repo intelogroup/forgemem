@@ -19,7 +19,7 @@ DEFAULT_MODELS = {
     "gemini": "gemini-2.0-flash",
     "ollama": "llama3.2",  # auto-detected from running instance if available
     "claude_code": "claude_code",  # model selected by the claude CLI / user's plan
-    "forgememo": "claude-haiku-4-5-20251001",  # managed — model chosen server-side
+    "forgememo": "gemini-2.0-flash",  # managed — Gemini Flash for max margin
 }
 
 OLLAMA_DEFAULT_URL = "http://localhost:11434"

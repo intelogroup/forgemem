@@ -61,11 +61,11 @@ jobs:
 
       # ── Verify MCP registration ─────────────────────────────
       - name: Check MCP registered in settings.json
-        shell: bash
         run: |
           python -c "
           import json
-          data = json.load(open('$HOME/.claude/settings.json'))
+          from pathlib import Path
+          data = json.load(open(Path.home() / '.claude' / 'settings.json'))
           assert 'forgememo' in data.get('mcpServers', {}), 'MCP not registered'
           print('MCP registered OK')
           "
@@ -445,13 +445,20 @@ jobs:
 
       - name: Init and start daemon in clean container
         run: |
-          mkdir -p /root/.claude
+          mkdir -p /root/.claude /root/.gemini /root/.codex
           echo '{}' > /root/.claude/settings.json
           forgememo init --yes --provider claude_code
 
-          export FORGEMEMO_HTTP_PORT=5555
-          python -m forgememo.daemon &
+          python -m forgememo.daemon > /tmp/daemon_out.log 2>&1 &
+          DAEMON_PID=$!
+          echo "Daemon PID: $DAEMON_PID"
+
           for i in 1 2 3 4 5 6 7 8 9 10; do
+            if ! kill -0 $DAEMON_PID 2>/dev/null; then
+              echo "ERROR: daemon process died"
+              cat /tmp/daemon_out.log
+              exit 1
+            fi
             if python -c "import requests; r=requests.get('http://127.0.0.1:5555/health',timeout=2); exit(0 if r.ok else 1)" 2>/dev/null; then
               echo "Daemon healthy after ${i}s"
               break

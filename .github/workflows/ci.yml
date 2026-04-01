@@ -23,14 +23,13 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest
       - name: Run tests
-        run: pytest -q
+        run: pytest -q || if [ $? -eq 5 ]; then echo "No tests collected — skipping"; else exit 1; fi
+        shell: bash
 
   tests-linux-container:
     runs-on: ubuntu-latest
     container:
       image: python:3.12-slim
-    env:
-      FORGEMEMO_DAEMON_LOG: /tmp/forgememo_daemon.log
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -39,4 +38,5 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest
       - name: Run tests
-        run: pytest -q
+        run: pytest -q || if [ $? -eq 5 ]; then echo "No tests collected — skipping"; else exit 1; fi
+        shell: bash

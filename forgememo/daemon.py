@@ -238,13 +238,24 @@ def create_app() -> Flask:
         concepts_raw = request.args.get("concepts")
         concepts = [c.strip() for c in concepts_raw.split(",")] if concepts_raw else None
 
+        # Sanitize query for FTS5: wrap each token in double quotes so
+        # hyphens/special chars aren't interpreted as FTS operators.
+        # Internal double quotes are escaped by doubling them per SQLite docs.
+        def _fts5_safe(raw: str) -> str:
+            tokens = raw.split()
+            return " ".join(f'"{t.replace(chr(34), chr(34)+chr(34))}"' for t in tokens if t)
+
+        fts_q = _fts5_safe(q)
+        if not fts_q:
+            return jsonify({"results": []}), 200
+
         conn = get_conn()
         try:
             results = []
 
             try:
                 # Distilled summaries
-                params = [q]
+                params = [fts_q]
                 sql = (
                     "SELECT d.id, d.ts, d.type, d.title, d.impact_score, d.project_id "
                     "FROM distilled_summaries d "
@@ -273,7 +284,7 @@ def create_app() -> Flask:
                     )
 
                 # Session summaries
-                params = [q]
+                params = [fts_q]
                 sql = (
                     "SELECT s.id, s.ts, s.request, s.project_id "
                     "FROM session_summaries s "
@@ -299,7 +310,7 @@ def create_app() -> Flask:
                     )
 
                 # Raw events
-                params = [q]
+                params = [fts_q]
                 sql = (
                     "SELECT e.id, e.ts, e.project_id, e.event_type, e.tool_name "
                     "FROM events e "
@@ -331,7 +342,7 @@ def create_app() -> Flask:
 
                 # Compat principles (legacy)
                 try:
-                    params = [q]
+                    params = [fts_q]
                     sql = (
                         "SELECT p.id, p.ts, p.type, p.principle, p.impact_score, p.project_tag "
                         "FROM principles p "

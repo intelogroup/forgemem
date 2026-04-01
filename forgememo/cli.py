@@ -850,8 +850,38 @@ def stop():
             subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
         raise typer.Exit(0)
 
+    if sys.platform == "win32":
+        import socket as _sock
+
+        http_port = os.environ.get("FORGEMEMO_HTTP_PORT", "5555")
+        try:
+            with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
+                _s.settimeout(1)
+                alive = _s.connect_ex(("127.0.0.1", int(http_port))) == 0
+        except Exception:
+            alive = False
+        if alive:
+            # Find and kill daemon/worker processes
+            result = subprocess.run(
+                ["taskkill", "/f", "/im", "forgememo.exe"],
+                capture_output=True, text=True, check=False,
+            )
+            if result.returncode == 0:
+                console.print("[green]Forgememo processes stopped.[/]")
+            else:
+                console.print(f"[yellow]Could not stop processes:[/] {result.stderr.strip()}")
+        else:
+            console.print("[dim]Daemon not running.[/]")
+        # Remove scheduled tasks
+        for tn in ("Forgememo Daemon", "Forgememo Worker"):
+            subprocess.run(
+                ["schtasks", "/delete", "/tn", tn, "/f"],
+                capture_output=True, text=True, check=False,
+            )
+        raise typer.Exit(0)
+
     if sys.platform != "darwin":
-        console.print("[yellow]warning:[/] LaunchAgent is macOS only.")
+        console.print(f"[yellow]Unsupported platform '{sys.platform}'.[/] Kill the daemon process manually.")
         raise typer.Exit(0)
 
     if not PLIST_PATH.exists():
@@ -952,6 +982,9 @@ def status(
     undistilled = conn.execute(
         "SELECT COUNT(*) FROM traces WHERE distilled=0"
     ).fetchone()[0]
+    e_total = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    ds_total = conn.execute("SELECT COUNT(*) FROM distilled_summaries").fetchone()[0]
+    ss_total = conn.execute("SELECT COUNT(*) FROM session_summaries").fetchone()[0]
     conn.close()
 
     provider = fm_cfg.get_provider() or "not set"
@@ -974,6 +1007,9 @@ def status(
 
         out = {
             "db": str(DB_PATH),
+            "events": e_total,
+            "distilled_summaries": ds_total,
+            "session_summaries": ss_total,
             "traces": t_total,
             "principles": p_total,
             "undistilled": undistilled,
@@ -989,6 +1025,9 @@ def status(
     table.add_column("value")
 
     table.add_row("DB", str(DB_PATH))
+    table.add_row("Events", str(e_total))
+    table.add_row("Distilled", str(ds_total))
+    table.add_row("Sessions", str(ss_total))
     table.add_row("Traces", str(t_total))
     table.add_row("Principles", str(p_total))
     undistilled_val = (
@@ -1092,6 +1131,185 @@ def status(
             url = fm_cfg.get_ollama_url()
             console.print(f"  [red]{CROSS} not reachable[/] at {url}")
             console.print("  Start with: [cyan]ollama serve[/]")
+
+
+@app.command()
+def doctor():
+    """Run end-to-end self-test: DB, daemon, write, search, MCP."""
+    import time
+    import uuid
+
+    from forgememo.storage import DB_PATH
+
+    checks_passed = 0
+    checks_failed = 0
+
+    def _pass(msg: str):
+        nonlocal checks_passed
+        checks_passed += 1
+        console.print(f"  [green]{CHECK}[/] {msg}")
+
+    def _fail(msg: str):
+        nonlocal checks_failed
+        checks_failed += 1
+        console.print(f"  [red]{CROSS}[/] {msg}")
+
+    console.print("[bold]Forgememo Doctor[/]\n")
+
+    # 1. DB exists
+    if DB_PATH.exists():
+        _pass(f"DB exists: {DB_PATH}")
+    else:
+        _fail(f"DB not found: {DB_PATH} — run: forgememo init")
+        raise typer.Exit(1)
+
+    # 2. DB schema check
+    from forgememo.storage import get_conn
+
+    conn = get_conn()
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    required_tables = {"events", "distilled_summaries", "session_summaries"}
+    missing_tables = required_tables - tables
+    conn.close()
+    if not missing_tables:
+        _pass(f"DB schema OK (tables: {', '.join(sorted(required_tables))})")
+    else:
+        _fail(f"Missing tables: {', '.join(sorted(missing_tables))} — run: forgememo init")
+
+    # 3. Daemon reachable
+    import tempfile as _tempfile
+
+    daemon_url = None
+    if sys.platform == "win32":
+        http_port = os.environ.get("FORGEMEMO_HTTP_PORT", "5555")
+        daemon_url = f"http://127.0.0.1:{http_port}"
+    elif os.environ.get("FORGEMEMO_DAEMON_URL"):
+        daemon_url = os.environ["FORGEMEMO_DAEMON_URL"]
+    elif os.environ.get("FORGEMEMO_HTTP_PORT"):
+        daemon_url = f"http://127.0.0.1:{os.environ['FORGEMEMO_HTTP_PORT']}"
+    else:
+        socket_path = os.environ.get(
+            "FORGEMEMO_SOCKET", os.path.join(_tempfile.gettempdir(), "forgememo.sock")
+        )
+        if Path(socket_path).exists():
+            daemon_url = "socket"  # marker
+        else:
+            daemon_url = None
+
+    daemon_alive = False
+    if daemon_url and daemon_url != "socket":
+        try:
+            import requests as _req
+
+            resp = _req.get(f"{daemon_url}/health", timeout=3)
+            daemon_alive = resp.ok and resp.json().get("ok")
+        except Exception:
+            pass
+    elif daemon_url == "socket":
+        try:
+            import requests_unixsocket
+
+            sess = requests_unixsocket.Session()
+            socket_path = os.environ.get(
+                "FORGEMEMO_SOCKET", os.path.join(_tempfile.gettempdir(), "forgememo.sock")
+            )
+            sock_url = "http+unix://" + socket_path.replace("/", "%2F")
+            resp = sess.get(f"{sock_url}/health", timeout=3)
+            daemon_alive = resp.ok and resp.json().get("ok")
+            daemon_url = f"unix://{socket_path}"
+        except Exception:
+            pass
+
+    if daemon_alive:
+        _pass(f"Daemon reachable at {daemon_url}")
+    else:
+        _fail("Daemon not reachable — run: forgememo start")
+        console.print(f"\n  [bold]{checks_passed} passed, {checks_failed} failed[/]")
+        console.print("  [dim]Fix daemon connectivity before running write/search tests.[/]")
+        raise typer.Exit(1)
+
+    # 4. Write probe event
+    probe_id = f"doctor-{uuid.uuid4().hex[:8]}"
+    probe_payload = {"message": f"doctor probe {probe_id}"}
+    try:
+        import requests as _req
+
+        if daemon_url.startswith("unix://"):
+            import requests_unixsocket
+
+            sess = requests_unixsocket.Session()
+            socket_path = daemon_url.replace("unix://", "")
+            sock_url = "http+unix://" + socket_path.replace("/", "%2F")
+            resp = sess.post(
+                f"{sock_url}/events",
+                json={
+                    "session_id": probe_id,
+                    "project_id": probe_id,
+                    "source_tool": "doctor",
+                    "event_type": "doctor_probe",
+                    "tool_name": None,
+                    "payload": probe_payload,
+                    "seq": int(time.time() * 1000),
+                },
+                timeout=5,
+            )
+        else:
+            resp = _req.post(
+                f"{daemon_url}/events",
+                json={
+                    "session_id": probe_id,
+                    "project_id": probe_id,
+                    "source_tool": "doctor",
+                    "event_type": "doctor_probe",
+                    "tool_name": None,
+                    "payload": probe_payload,
+                    "seq": int(time.time() * 1000),
+                },
+                timeout=5,
+            )
+        if resp.status_code == 201:
+            _pass("Event write OK (POST /events -> 201)")
+        else:
+            _fail(f"Event write unexpected status {resp.status_code}: {resp.text[:100]}")
+    except Exception as e:
+        _fail(f"Event write failed: {e}")
+
+    # 5. Search for probe event
+    try:
+        if daemon_url.startswith("unix://"):
+            resp = sess.get(f"{sock_url}/search", params={"q": probe_id}, timeout=5)
+        else:
+            resp = _req.get(f"{daemon_url}/search", params={"q": probe_id}, timeout=5)
+        results = resp.json().get("results", [])
+        event_found = any(r.get("id", "").startswith("e:") for r in results)
+        if event_found:
+            _pass("Event search OK (event found via /search)")
+        else:
+            _fail("Event search FAILED — event was written but /search returned no e: results")
+    except Exception as e:
+        _fail(f"Event search failed: {e}")
+
+    # 6. MCP registration
+    settings_path = Path.home() / ".claude" / "settings.json"
+    mcp_ok = False
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text())
+            mcp_ok = "forgememo" in data.get("mcpServers", {})
+        except Exception:
+            pass
+    if mcp_ok:
+        _pass("MCP registered in ~/.claude/settings.json")
+    else:
+        _fail("MCP not registered — run: forgememo init")
+
+    # Summary
+    console.print(f"\n  [bold]{checks_passed} passed, {checks_failed} failed[/]")
+    if checks_failed == 0:
+        console.print("  [green]All checks passed![/]")
+    else:
+        console.print("  [yellow]Some checks failed. See above for details.[/]")
+        raise typer.Exit(1)
 
 
 @app.command()

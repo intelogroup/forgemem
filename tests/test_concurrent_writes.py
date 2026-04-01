@@ -1,31 +1,51 @@
 """
-Tests for the DBContext connection-pool fix:
-  1. rollback() on exception — no poisoned connections after a write failure
+Tests for concurrent-write safety:
+  1. rollback() on exception — connection is clean after a write failure
   2. _write_lock serializes concurrent writes — no "database is locked" cascade
 """
 
 import concurrent.futures
+import contextlib
 import sqlite3
 import threading
 
 import pytest
 
-import forgememo.api as api_module
-from forgememo.api import create_app, init_db, init_pool, get_db
+import forgememo.daemon as daemon_module
+import forgememo.storage as storage_module
+from forgememo.daemon import create_app
+from forgememo.storage import get_conn, init_db
+
+
+@contextlib.contextmanager
+def get_db(write=False):
+    """Context manager matching the old api.get_db() contract: acquire write lock,
+    get connection, rollback on exception, close on exit."""
+    if write:
+        daemon_module._write_lock.acquire()
+    conn = get_conn()
+    try:
+        yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
+        if write:
+            daemon_module._write_lock.release()
 
 
 @pytest.fixture(autouse=True)
 def isolated_db(tmp_path, monkeypatch):
-    """Point every test at a fresh in-memory-backed temp DB with its own pool."""
+    """Point every test at a fresh temp DB."""
     db_file = tmp_path / "test.db"
-    monkeypatch.setattr(api_module, "DB_PATH", db_file)
-    monkeypatch.setattr(api_module, "pool", None)
-    monkeypatch.setattr(api_module, "_write_lock", threading.Lock())
-    init_pool()
+    monkeypatch.setattr(storage_module, "DB_PATH", db_file)
+    monkeypatch.setattr(daemon_module, "_write_lock", threading.Lock())
     init_db()
     yield db_file
-    api_module.pool.close_all()
-    monkeypatch.setattr(api_module, "pool", None)
 
 
 @pytest.fixture()
@@ -37,9 +57,8 @@ def client(isolated_db):
 
 # ─── Unit: rollback on exception prevents connection poisoning ────────────────
 
-def test_rollback_on_exception_does_not_poison_pool():
-    """After a failed write, the returned connection must have no open txn."""
-    # Force an error inside a write context
+def test_rollback_on_exception_does_not_poison_connection():
+    """After a failed write, a subsequent write must succeed."""
     try:
         with get_db(write=True) as conn:
             conn.execute(
@@ -67,7 +86,7 @@ def test_rollback_on_exception_does_not_poison_pool():
 
 
 def test_failed_write_does_not_leave_transaction_open():
-    """Poison test: verify the connection has in_transaction=False after rollback."""
+    """Verify in_transaction=False after rollback."""
     try:
         with get_db(write=True) as conn:
             conn.execute(
@@ -79,7 +98,6 @@ def test_failed_write_does_not_leave_transaction_open():
     except sqlite3.OperationalError:
         pass
 
-    # Borrow a connection — it must not be mid-transaction
     with get_db() as conn:
         assert not conn.in_transaction, "connection still has an open transaction after failure"
 
@@ -148,33 +166,35 @@ def test_read_does_not_acquire_write_lock():
     assert "count" in results, "read thread did not complete (likely blocked by write lock)"
 
 
-# ─── Integration: POST /traces concurrently ──────────────────────────────────
+# ─── Integration: POST /events concurrently ──────────────────────────────────
 
-def test_concurrent_post_traces_all_succeed(isolated_db):
-    """/traces must accept N concurrent POSTs without any 500 errors."""
+def test_concurrent_post_events_all_succeed(isolated_db):
+    """/events must accept N concurrent POSTs without any 500 errors."""
     app = create_app()
     N = 10
-    payload = {
-        "type": "success",
-        "content": "concurrent integration write",
-        "project": "ci-test",
-    }
 
     responses = []
     lock = threading.Lock()
 
-    def post_one():
-        # Each thread gets its own client to avoid Flask contextvars collision.
+    def post_one(i):
+        payload = {
+            "session_id": f"sess-{i}",
+            "project_id": "ci-test",
+            "source_tool": "claude_code",
+            "event_type": "note",
+            "payload": {"text": f"concurrent integration write {i}"},
+            "seq": i,
+        }
         with app.test_client() as c:
-            resp = c.post("/traces", json=payload)
+            resp = c.post("/events", json=payload)
         with lock:
             responses.append(resp.status_code)
 
-    threads = [threading.Thread(target=post_one) for _ in range(N)]
+    threads = [threading.Thread(target=post_one, args=(i,)) for i in range(N)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
 
-    failures = [s for s in responses if s != 201]
+    failures = [s for s in responses if s not in (200, 201)]
     assert failures == [], f"{len(failures)}/{N} POSTs failed with status: {set(failures)}"

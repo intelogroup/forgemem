@@ -1,13 +1,24 @@
 {
-  "forgemem_skill_version": 3,
+  "forgemem_skill_version": 4,
   "description": "Forgememo persistent memory tools for AI agents",
   "setup": {
-    "description": "First-time setup — requires the user to complete interactive provider selection",
-    "commands": [
-      "pip install forgememo",
-      "forgememo init"
-    ],
-    "note": "Do not try to bypass first-run setup. The user must run 'forgemem init' in a real terminal and choose a provider interactively. After setup, tell the user to restart Codex to activate the MCP connection."
+    "first_time": {
+      "commands": [
+        "pip install forgememo",
+        "forgememo start"
+      ],
+      "note": "'forgememo start' auto-detects a missing provider and launches interactive first-time setup. The user picks a provider once in the terminal, then the daemon starts. Tell the user to restart Codex after."
+    },
+    "daemon_not_running": {
+      "commands": ["forgememo start"],
+      "note": "Run after a reboot or if any MCP tool returns 'Daemon unreachable'. Then retry the MCP call."
+    }
+  },
+  "switch_provider": {
+    "description": "If the user asks to switch inference provider, run `forgememo config -i` in bash. It will print a message asking the user to run the command in their terminal. Relay that message — the user picks the provider themselves from the interactive menu.",
+    "command": "forgememo config -i",
+    "available_providers": ["forgememo", "claude_code", "ollama", "anthropic", "openai", "gemini"],
+    "note": "This requires a real terminal (TTY). The agent runs the command to get the relay message; the user runs it in their terminal to interact."
   },
   "tools": [
     {

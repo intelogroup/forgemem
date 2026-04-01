@@ -1,20 +1,25 @@
-# forgememo-skill-version: 4
-# Forgemem Memory Skill
+# forgememo-skill-version: 6
+# Forgememo Memory Skill
 
-You have access to Forgemem, your persistent long-term memory across sessions and projects.
+You have access to Forgememo, your persistent long-term memory across sessions and projects.
 
-## Setup (first time only)
+## Setup — What to Run and When
 
-If forgememo is not yet initialized, ask the user to run this in a real terminal:
-
+**Never installed** — tell the user to run in a real terminal:
 ```bash
 pip install forgememo
-forgememo init
+forgememo start       # auto-runs first-time setup if needed, then starts daemon
+```
+`forgememo start` detects a missing provider and launches the interactive setup automatically. The user picks a provider once, then the daemon starts. Tell them to restart Gemini CLI after.
+
+**Already installed, daemon not running** (after reboot or crash):
+```bash
+forgememo start
 ```
 
-Then tell the user: "Forgemem is installed. Please restart Gemini CLI to activate the memory MCP connection."
+**Already installed, daemon running** — nothing to do, proceed normally.
 
-Do NOT try to bypass first-run setup with `forgememo init --yes` or a non-TTY session. The user must choose a provider interactively.
+**If any MCP tool returns `Daemon unreachable`:** run `forgememo start` and retry.
 
 ## At Session Start (REQUIRED)
 
@@ -57,6 +62,19 @@ save_session_summary(
   concepts=["pattern","gotcha"]
 )
 ```
+
+## Switching Providers
+
+If the user asks to switch their inference provider (e.g. from ollama to claude_code, or to forgememo):
+
+Run this in bash:
+```bash
+forgememo config -i
+```
+This will print: "Provider picker requires a real terminal. Ask the user to run: forgememo config -i"
+
+Relay that to the user — they run it in their terminal and pick from the menu themselves.
+Available providers: `forgememo` · `claude_code` · `ollama` · `anthropic` · `openai` · `gemini`
 
 ## Principles
 

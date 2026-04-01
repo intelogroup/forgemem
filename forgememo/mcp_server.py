@@ -69,40 +69,60 @@ def _daemon_get(path: str, params: dict | None = None) -> dict:
     if not DAEMON_URL and sys.platform != "win32":
         session = _socket_session()
         if session:
-            socket_url = "http+unix://" + SOCKET_PATH.replace("/", "%2F")
-            resp = session.get(f"{socket_url}{path}", params=params, timeout=5)
-            if not resp.ok:
-                raise RuntimeError(
-                    f"daemon error {resp.status_code}: {resp.text[:200]}"
-                )
-            return resp.json()
+            try:
+                socket_url = "http+unix://" + SOCKET_PATH.replace("/", "%2F")
+                resp = session.get(f"{socket_url}{path}", params=params, timeout=5)
+                if not resp.ok:
+                    raise RuntimeError(
+                        f"daemon error {resp.status_code}: {resp.text[:200]}"
+                    )
+                return resp.json()
+            except RuntimeError:
+                raise
+            except Exception:
+                pass  # fall through to HTTP
     if not DAEMON_URL and not HTTP_PORT:
         raise RuntimeError("daemon transport unavailable (no socket and no HTTP port)")
     url = DAEMON_URL.rstrip("/") if DAEMON_URL else f"http://127.0.0.1:{HTTP_PORT}"
-    resp = requests.get(f"{url}{path}", params=params, timeout=5)
-    if not resp.ok:
-        raise RuntimeError(f"daemon error {resp.status_code}: {resp.text[:200]}")
-    return resp.json()
+    try:
+        resp = requests.get(f"{url}{path}", params=params, timeout=5)
+        if not resp.ok:
+            raise RuntimeError(f"daemon error {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+    except RuntimeError:
+        raise
+    except Exception:
+        raise RuntimeError("Daemon unreachable. Run: forgememo start")
 
 
 def _daemon_post(path: str, payload: dict) -> dict:
     if not DAEMON_URL and sys.platform != "win32":
         session = _socket_session()
         if session:
-            socket_url = "http+unix://" + SOCKET_PATH.replace("/", "%2F")
-            resp = session.post(f"{socket_url}{path}", json=payload, timeout=5)
-            if not resp.ok:
-                raise RuntimeError(
-                    f"daemon error {resp.status_code}: {resp.text[:200]}"
-                )
-            return resp.json()
+            try:
+                socket_url = "http+unix://" + SOCKET_PATH.replace("/", "%2F")
+                resp = session.post(f"{socket_url}{path}", json=payload, timeout=5)
+                if not resp.ok:
+                    raise RuntimeError(
+                        f"daemon error {resp.status_code}: {resp.text[:200]}"
+                    )
+                return resp.json()
+            except RuntimeError:
+                raise
+            except Exception:
+                pass  # fall through to HTTP
     if not DAEMON_URL and not HTTP_PORT:
         raise RuntimeError("daemon transport unavailable (no socket and no HTTP port)")
     url = DAEMON_URL.rstrip("/") if DAEMON_URL else f"http://127.0.0.1:{HTTP_PORT}"
-    resp = requests.post(f"{url}{path}", json=payload, timeout=5)
-    if not resp.ok:
-        raise RuntimeError(f"daemon error {resp.status_code}: {resp.text[:200]}")
-    return resp.json()
+    try:
+        resp = requests.post(f"{url}{path}", json=payload, timeout=5)
+        if not resp.ok:
+            raise RuntimeError(f"daemon error {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+    except RuntimeError:
+        raise
+    except Exception:
+        raise RuntimeError("Daemon unreachable. Run: forgememo start")
 
 
 def _post_event_bg(

@@ -233,7 +233,7 @@ def _register_hooks(settings_path: Path) -> bool:
     data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
     hooks = data.setdefault("hooks", {})
     changed = False
-    for event in ("UserPromptSubmit", "Stop"):
+    for event in ("UserPromptSubmit", "Stop", "PostToolUse"):
         existing = hooks.get(event, [])
         already = any(
             h.get("hooks", [{}])[0].get("command", "").startswith("forgememo hook")
@@ -803,21 +803,11 @@ def start(
     from forgememo import config as fm_cfg
 
     if fm_cfg.load().get("provider") is None:
-        console.print(
-            Panel(
-                "[bold red]No inference provider configured.[/]\n\n"
-                "Run one of these first, then retry [cyan]forgememo start[/]:\n"
-                "  [cyan]forgememo config anthropic --key sk-ant-...[/]\n"
-                "  [cyan]forgememo config openai    --key sk-...[/]\n"
-                "  [cyan]forgememo config gemini    --key AIza...[/]\n"
-                "  [cyan]forgememo config ollama[/]               [dim](local, free)[/]\n"
-                "  [cyan]forgememo config forgememo[/]             [dim](managed, no key needed)[/]",
-                title="[bold red]ACTION REQUIRED — configure provider first[/]",
-                border_style="red",
-                expand=False,
-            )
-        )
-        raise typer.Exit(code=1)
+        # First-time install: drop straight into interactive setup.
+        # init() handles DB, MCP, hooks, provider picker, and calls _do_start() on success.
+        console.print("[dim]No provider configured — running first-time setup…[/]")
+        init()
+        return
     _do_start(schedule=schedule, mine=mine, mine_interval=mine_interval)
 
 
@@ -1435,7 +1425,7 @@ def logs(
     if follow:
         console.print(f"[dim]Following {log_file} (Ctrl+C to stop)...[/]")
         try:
-            proc = subprocess.run(
+            subprocess.run(
                 ["tail", "-f", "-n", str(lines), str(log_file)] if sys.platform != "win32"
                 else ["powershell", "-Command", f"Get-Content -Path '{log_file}' -Tail {lines} -Wait"],
                 check=False,

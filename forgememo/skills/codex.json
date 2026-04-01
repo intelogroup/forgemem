@@ -2,12 +2,17 @@
   "forgemem_skill_version": 3,
   "description": "Forgememo persistent memory tools for AI agents",
   "setup": {
-    "description": "First-time setup — requires the user to complete interactive provider selection",
-    "commands": [
-      "pip install forgememo",
-      "forgememo init"
-    ],
-    "note": "Do not try to bypass first-run setup. The user must run 'forgemem init' in a real terminal and choose a provider interactively. After setup, tell the user to restart Codex to activate the MCP connection."
+    "first_time": {
+      "commands": [
+        "pip install forgememo",
+        "forgememo start"
+      ],
+      "note": "'forgememo start' auto-detects a missing provider and launches interactive first-time setup. The user picks a provider once in the terminal, then the daemon starts. Tell the user to restart Codex after."
+    },
+    "daemon_not_running": {
+      "commands": ["forgememo start"],
+      "note": "Run after a reboot or if any MCP tool returns 'Daemon unreachable'. Then retry the MCP call."
+    }
   },
   "tools": [
     {

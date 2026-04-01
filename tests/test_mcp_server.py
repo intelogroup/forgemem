@@ -68,6 +68,26 @@ def test_get_memory_details_returns_json(monkeypatch):
     assert data["id"] == "d:7"
 
 
+def test_daemon_get_raises_actionable_error_on_connection_refused(monkeypatch):
+    import requests as _requests
+
+    monkeypatch.setattr(mcp_server, "DAEMON_URL", None)
+    monkeypatch.setattr(mcp_server, "HTTP_PORT", "5555")
+    # Disable socket path
+    monkeypatch.setattr(mcp_server, "_socket_session", lambda: None)
+
+    import sys
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    def fake_get(url, params=None, timeout=5):
+        raise _requests.exceptions.ConnectionError("Connection refused")
+
+    monkeypatch.setattr(mcp_server.requests, "get", fake_get)
+
+    with pytest.raises(RuntimeError, match="forgememo start"):
+        mcp_server._daemon_get("/search", params={"q": "test"})
+
+
 def test_get_memory_timeline_formats(monkeypatch):
     def fake_get(path, params=None):
         assert path == "/timeline"

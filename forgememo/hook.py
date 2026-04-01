@@ -29,6 +29,34 @@ SOURCE_TOOL = os.environ.get("FORGEMEMO_SOURCE_TOOL", "unknown")
 _PRIVATE_RE = None
 
 
+def _ensure_daemon() -> bool:
+    """Check daemon health; auto-restart if unreachable. Returns True if alive."""
+    port = HTTP_PORT or "5555"
+    url = f"http://127.0.0.1:{port}/health"
+    try:
+        requests.get(url, timeout=1).raise_for_status()
+        return True
+    except Exception:
+        pass
+    try:
+        subprocess.Popen(
+            [sys.executable, "-m", "forgememo.daemon"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        for _ in range(5):
+            time.sleep(1)
+            try:
+                requests.get(url, timeout=1).raise_for_status()
+                return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return False
+
+
 def _compile_private_re():
     import re
 
@@ -162,6 +190,13 @@ def _format_context_json(text: str, event_name: str) -> str:
 
 def _handle_session_recall(payload: dict, event_name: str) -> int:
     """Fetch recent memories and inject them as context (stdout JSON)."""
+    if not _ensure_daemon():
+        print(
+            _format_context_json(
+                "Forgememo daemon unreachable — run: forgememo start", event_name
+            )
+        )
+        return 0
     project_id = _resolve_project_id(payload)
     summaries = _daemon_get("/session_summaries", {"project_id": project_id, "k": 2})
     search = _daemon_get("/search", {"q": "recent", "project_id": project_id, "k": 5})
@@ -187,6 +222,7 @@ def _handle_session_recall(payload: dict, event_name: str) -> int:
 
 def _handle_session_end(payload: dict) -> int:
     """Spawn background end-session synthesis; return immediately."""
+    _ensure_daemon()  # best-effort; background subprocess needs daemon up
     session_id = payload.get("session_id") or ""
     cwd = payload.get("cwd") or os.getcwd()
     import shutil as _shutil
@@ -246,6 +282,24 @@ _SESSION_END_EVENTS = {
     "session.deleted",  # OpenCode (session closed)
 }
 
+_WRITE_TOOL_NAMES = {"Edit", "Write", "Bash", "NotebookEdit", "MultiEdit"}
+
+_POST_TOOL_USE_EVENTS = {
+    "PostToolUse",  # Claude Code, Codex
+    "AfterTool",    # Gemini
+    "tool.done",    # OpenCode
+}
+
+
+def _handle_post_tool_use(payload: dict, event_name: str) -> int:
+    """Post write-op tool events to daemon; silently skip read-only tools."""
+    tool_name = payload.get("tool_name") or payload.get("toolName") or ""
+    if tool_name not in _WRITE_TOOL_NAMES:
+        return 0
+    event = _normalize_event(event_name, payload)
+    _post_event(event)
+    return 0
+
 
 def main() -> int:
     if len(sys.argv) < 2:
@@ -262,6 +316,8 @@ def main() -> int:
         return _handle_session_recall(payload, event_name)
     if event_name in _SESSION_END_EVENTS:
         return _handle_session_end(payload)
+    if event_name in _POST_TOOL_USE_EVENTS:
+        return _handle_post_tool_use(payload, event_name)
 
     event = _normalize_event(event_name, payload)
     _post_event(event)

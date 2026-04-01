@@ -11,7 +11,16 @@ from __future__ import annotations
 
 import os
 
-from forgememo.hook import strip_private, _normalize_event, _resolve_project_id
+from unittest.mock import MagicMock, patch
+
+from forgememo.hook import (
+    strip_private,
+    _normalize_event,
+    _resolve_project_id,
+    _ensure_daemon,
+    _handle_post_tool_use,
+    _WRITE_TOOL_NAMES,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -194,3 +203,105 @@ class TestNormalizeEvent:
         del payload["session_id"]
         event = _normalize_event("PostToolUse", payload)
         assert event["session_id"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# _ensure_daemon
+# ---------------------------------------------------------------------------
+
+class TestEnsureDaemon:
+    def test_returns_true_when_daemon_healthy(self, monkeypatch):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        with patch("forgememo.hook.requests.get", return_value=mock_resp) as mock_get:
+            result = _ensure_daemon()
+        assert result is True
+        mock_get.assert_called_once()
+
+    def test_spawns_subprocess_and_polls_when_daemon_down(self, monkeypatch):
+        import requests as _requests
+
+        call_count = {"n": 0}
+
+        def fake_get(url, timeout=1):
+            call_count["n"] += 1
+            if call_count["n"] <= 2:
+                raise _requests.exceptions.ConnectionError("refused")
+            mock_resp = MagicMock()
+            mock_resp.raise_for_status = MagicMock()
+            return mock_resp
+
+        with patch("forgememo.hook.requests.get", side_effect=fake_get), \
+             patch("forgememo.hook.subprocess.Popen") as mock_popen, \
+             patch("forgememo.hook.time.sleep"):
+            result = _ensure_daemon()
+
+        assert result is True
+        mock_popen.assert_called_once()
+
+    def test_returns_false_when_daemon_never_starts(self, monkeypatch):
+        import requests as _requests
+
+        with patch("forgememo.hook.requests.get",
+                   side_effect=_requests.exceptions.ConnectionError("refused")), \
+             patch("forgememo.hook.subprocess.Popen"), \
+             patch("forgememo.hook.time.sleep"):
+            result = _ensure_daemon()
+
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
+# _handle_post_tool_use
+# ---------------------------------------------------------------------------
+
+class TestPostToolUseHook:
+    def test_write_tool_is_posted(self, monkeypatch):
+        posted = []
+        monkeypatch.setattr("forgememo.hook._post_event", lambda e: posted.append(e))
+        _handle_post_tool_use(
+            {"tool_name": "Edit", "session_id": "s1", "project_id": "/tmp"}, "PostToolUse"
+        )
+        assert len(posted) == 1
+        assert posted[0]["tool_name"] == "Edit"
+
+    def test_read_tool_is_skipped(self, monkeypatch):
+        posted = []
+        monkeypatch.setattr("forgememo.hook._post_event", lambda e: posted.append(e))
+        for read_tool in ("Read", "Grep", "Glob", "WebSearch", "WebFetch"):
+            _handle_post_tool_use({"tool_name": read_tool, "session_id": "s1"}, "PostToolUse")
+        assert len(posted) == 0
+
+    def test_all_write_tools_captured(self, monkeypatch):
+        posted = []
+        monkeypatch.setattr("forgememo.hook._post_event", lambda e: posted.append(e))
+        for tool in _WRITE_TOOL_NAMES:
+            _handle_post_tool_use({"tool_name": tool, "session_id": "s1"}, "PostToolUse")
+        assert len(posted) == len(_WRITE_TOOL_NAMES)
+
+    def test_unknown_tool_is_skipped(self, monkeypatch):
+        posted = []
+        monkeypatch.setattr("forgememo.hook._post_event", lambda e: posted.append(e))
+        _handle_post_tool_use({"tool_name": "", "session_id": "s1"}, "PostToolUse")
+        _handle_post_tool_use({"session_id": "s1"}, "PostToolUse")
+        assert len(posted) == 0
+
+    def test_private_content_stripped(self, monkeypatch):
+        posted = []
+        monkeypatch.setattr("forgememo.hook._post_event", lambda e: posted.append(e))
+        _handle_post_tool_use(
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "echo <private>secret</private>"},
+                "session_id": "s1",
+            },
+            "PostToolUse",
+        )
+        assert len(posted) == 1
+        assert "secret" not in str(posted[0])
+
+    def test_gemini_aftertool_variant(self, monkeypatch):
+        posted = []
+        monkeypatch.setattr("forgememo.hook._post_event", lambda e: posted.append(e))
+        _handle_post_tool_use({"tool_name": "Write", "session_id": "s1"}, "AfterTool")
+        assert len(posted) == 1

@@ -119,8 +119,8 @@ class TestDetectProject:
             return R()
 
         monkeypatch.setattr(core.subprocess, "run", _fail)
-        monkeypatch.chdir(tmp_path / "somedir")
         (tmp_path / "somedir").mkdir(exist_ok=True)
+        monkeypatch.chdir(tmp_path / "somedir")
         result = core.detect_project()
         assert result == "somedir"
 
@@ -346,6 +346,7 @@ class TestCmdRetrieve:
 
     def test_json_format_returns_parseable_json(self, capsys):
         self._seed(principle="Keep DB connections short")
+        capsys.readouterr()  # drain _seed's stdout
         core.cmd_retrieve(self._retrieve("DB connections", fmt="json"))
         out = capsys.readouterr().out
         data = json.loads(out)
@@ -361,6 +362,7 @@ class TestCmdRetrieve:
     def test_project_filter_excludes_other_projects(self, capsys):
         self._seed(content="project A content", project="proj-A", principle="Principle A")
         self._seed(content="project B content", project="proj-B", principle="Principle B")
+        capsys.readouterr()  # drain _seed's stdout
         core.cmd_retrieve(self._retrieve("content", project="proj-A", fmt="json"))
         data = json.loads(capsys.readouterr().out)
         for p in data["principles"]:
@@ -371,6 +373,7 @@ class TestCmdRetrieve:
                    principle="Always have rollback plan")
         self._seed(content="great new feature", trace_type="success",
                    principle="Ship incrementally")
+        capsys.readouterr()  # drain _seed's stdout
         core.cmd_retrieve(self._retrieve("plan", type_="failure", fmt="json"))
         data = json.loads(capsys.readouterr().out)
         for p in data["principles"]:

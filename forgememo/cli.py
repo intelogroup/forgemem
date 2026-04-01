@@ -17,10 +17,12 @@ from forgememo.commands._shared import (  # re-exported for backward-compat
     LOG_PATH,  # noqa: F401
     _auto_detect_and_generate_skills,
     _make_console,  # noqa: F401
+    _register_hooks,  # noqa: F401
     _register_mcp,
     console,
 )
 from forgememo.commands.configure import _check_api_response  # noqa: F401  re-exported for tests
+from forgememo.commands.lifecycle import _configure_provider_noninteractive  # noqa: F401  re-exported for smoke tests
 from forgememo.commands.lifecycle import _do_start  # noqa: F401  re-exported for tests
 
 # Re-derive at import/reload time so that reloading cli with a different

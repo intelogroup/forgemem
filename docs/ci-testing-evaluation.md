@@ -4,8 +4,11 @@
 
 Forgememo is a Python CLI tool (daemon + MCP server) that integrates with 5 AI
 coding agents (Claude Code, Gemini CLI, Codex, OpenCode, Copilot) across 3 OSes
-(macOS, Linux, Windows). We need to test installation, daemon lifecycle, hook
-integration, and MCP transport across a **3x3 matrix**:
+(macOS, Linux, Windows). This evaluation is scoped to the 3 agents with
+headless CI support (Claude Code, Gemini CLI, Codex) -- OpenCode and Copilot
+lack non-interactive CLI modes suitable for automated testing. We need to test
+installation, daemon lifecycle, hook integration, and MCP transport across a
+**3x3 matrix** (3 OSes x 3 agents):
 
 | | macOS | Linux | Windows |
 |---|---|---|---|
@@ -277,8 +280,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Install Forgememo
         run: pip install -e .
+
+      - name: Install Claude Code CLI
+        if: matrix.agent == 'claude-code'
+        run: npm i -g @anthropic-ai/claude-code@<pinned-version>
+
+      - name: Install Gemini CLI
+        if: matrix.agent == 'gemini-cli'
+        run: npm i -g @google/gemini-cli@<pinned-version>
+
+      - name: Install Codex CLI
+        if: matrix.agent == 'codex-cli'
+        run: npm i -g @openai/codex@<pinned-version>
 
       - name: Start daemon
         run: forgememo start --background

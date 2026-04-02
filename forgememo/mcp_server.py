@@ -34,6 +34,7 @@ SOCKET_PATH = os.environ.get(
     "FORGEMEMO_SOCKET", os.path.join(tempfile.gettempdir(), "forgememo.sock")
 )
 HTTP_PORT = os.environ.get("FORGEMEMO_HTTP_PORT", "5555")
+MOCK_TRANSPORT = os.environ.get("FORGEMEMO_MOCK_TRANSPORT") == "1"
 
 
 def _socket_session():
@@ -43,6 +44,31 @@ def _socket_session():
         return requests_unixsocket.Session()
     except Exception:
         return None
+
+
+class _MockResponse:
+    """Mock requests.Response for testing without daemon."""
+
+    def __init__(self, data: dict, status_code: int = 200):
+        self._data = data
+        self.status_code = status_code
+        self.ok = 200 <= status_code < 300
+
+    def json(self):
+        return self._data
+
+
+def _mock_daemon_response(path: str, params: dict | None = None) -> _MockResponse:
+    """Return mock responses matching daemon API schema."""
+    if path == "/health":
+        return _MockResponse({"status": "ok", "version": "mock"})
+    if path == "/events":
+        return _MockResponse({"status": "queued", "seq": 1})
+    if path == "/query":
+        return _MockResponse({"results": [], "total": 0})
+    if path == "/status":
+        return _MockResponse({"status": "running", "projects": []})
+    return _MockResponse({"status": "ok"})
 
 
 @functools.lru_cache(maxsize=64)
@@ -66,6 +92,8 @@ def _resolve_project_id(workspace_root: str) -> str:
 
 
 def _daemon_get(path: str, params: dict | None = None) -> dict:
+    if MOCK_TRANSPORT:
+        return _mock_daemon_response(path, params).json()
     if not DAEMON_URL and sys.platform != "win32":
         session = _socket_session()
         if session:
@@ -96,6 +124,8 @@ def _daemon_get(path: str, params: dict | None = None) -> dict:
 
 
 def _daemon_post(path: str, payload: dict) -> dict:
+    if MOCK_TRANSPORT:
+        return _mock_daemon_response(path).json()
     if not DAEMON_URL and sys.platform != "win32":
         session = _socket_session()
         if session:

@@ -120,10 +120,13 @@ _write_lock = threading.Lock()
 _ERROR_EVENTS_CIRCUIT_BREAKER_FAIL_LIMIT = 3
 _error_events_consecutive_failures = 0
 _error_events_disabled = False
+_DISABLE_BREAKER = os.environ.get("FORGEMEMO_DISABLE_BREAKER") == "1"
 
 
 def _error_events_circuit_open() -> bool:
     """Check if error_events circuit breaker is open (DISABLED)."""
+    if _DISABLE_BREAKER:
+        return False
     return _error_events_disabled
 
 

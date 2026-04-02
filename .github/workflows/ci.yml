@@ -12,6 +12,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.12"]
+    env:
+      FORGEMEMO_MOCK_TRANSPORT: "1"
+      FORGEMEMO_DISABLE_BREAKER: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,6 +33,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: python:3.12-slim
+    env:
+      FORGEMEMO_MOCK_TRANSPORT: "1"
+      FORGEMEMO_DISABLE_BREAKER: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies

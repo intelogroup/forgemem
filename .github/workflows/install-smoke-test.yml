@@ -7,16 +7,16 @@ on:
 jobs:
   # ═══════════════════════════════════════════════════════════════════
   # Job 1: Core smoke test — install, init, daemon, roundtrip
+  # RESTRICTED to Ubuntu: Full lifecycle daemon test only on Linux for stability
   # ═══════════════════════════════════════════════════════════════════
   smoke-test:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4

@@ -151,7 +151,10 @@ def _error_events_circuit_open() -> bool:
 
 def _error_events_record_failure() -> None:
     """Record a failure and trip circuit breaker if limit exceeded."""
-    global _error_events_consecutive_failures, _error_events_disabled, _error_events_tripped_at
+    global \
+        _error_events_consecutive_failures, \
+        _error_events_disabled, \
+        _error_events_tripped_at
     _error_events_consecutive_failures += 1
     if _error_events_consecutive_failures >= _ERROR_EVENTS_CIRCUIT_BREAKER_FAIL_LIMIT:
         was_disabled = _error_events_disabled
@@ -166,7 +169,10 @@ def _error_events_record_failure() -> None:
 
 def _error_events_record_success() -> None:
     """Record success and reset circuit breaker."""
-    global _error_events_consecutive_failures, _error_events_disabled, _error_events_tripped_at
+    global \
+        _error_events_consecutive_failures, \
+        _error_events_disabled, \
+        _error_events_tripped_at
     _error_events_consecutive_failures = 0
     if _error_events_disabled:
         _error_events_disabled = False
@@ -1091,14 +1097,31 @@ def main():
             http_server = make_server("127.0.0.1", port, app, threaded=True)
             write_port(port)
             from forgememo.port import write_pid, delete_pid as _delete_pid
+
             write_pid(os.getpid())
             logger.info("Health check: curl http://127.0.0.1:%s/health", port)
+
+            gs = GracefulShutdown()
+            _shutdown = threading.Event()
+
+            def _serve():
+                try:
+                    http_server.serve_forever()
+                finally:
+                    _shutdown.set()
+
+            _t = threading.Thread(target=_serve, daemon=True)
+            _t.start()
+
             try:
-                http_server.serve_forever()
-                logger.info("serve_forever() returned — daemon shutting down.")
-            except Exception as _exc:
-                logger.exception("Unhandled exception in serve_forever(): %s", _exc)
-                raise
+                while not _shutdown.is_set():
+                    _shutdown.wait(1.0)
+                    if gs.shutdown:
+                        logger.info("Shutdown signal received, stopping server...")
+                        http_server.shutdown()
+                        break
+            except KeyboardInterrupt:
+                http_server.shutdown()
             finally:
                 delete_port()
                 _delete_pid()

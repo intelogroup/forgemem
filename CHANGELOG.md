@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.4.12] — 2026-04-02
+
+### Fixed
+- Windows daemon: replace blocking `serve_forever()` with polling loop that checks shutdown flag
+- `GracefulShutdown.shutdown` flag now actually stops the server via `http_server.shutdown()`
+- Daemon logs exit path on shutdown (`Daemon stopped (Windows)`)
+
 ## [0.4.11] — 2026-04-02
 
 ### Fixed

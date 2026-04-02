@@ -39,6 +39,7 @@ from forgememo.hook import (
     _extract_error_text,
     _error_fingerprint,
     _extract_error_keywords,
+    _is_within_debounce,
     _read_stdin_json,
     _post_event,
     _daemon_get,
@@ -1569,3 +1570,217 @@ class TestDaemonPost:
         monkeypatch.setattr(hook.requests, "post", lambda url, json=None, timeout=None: mock_resp)
         result = hook._daemon_post("/error_events", {})
         assert result == {"fallback": True}
+
+
+# ---------------------------------------------------------------------------
+# _is_within_debounce
+# ---------------------------------------------------------------------------
+
+
+class TestIsWithinDebounce:
+    def test_none_returns_false(self):
+        assert _is_within_debounce(None) is False
+
+    def test_empty_string_returns_false(self):
+        assert _is_within_debounce("") is False
+
+    def test_recent_timestamp_returns_true(self):
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        assert _is_within_debounce(now) is True
+
+    def test_old_timestamp_returns_false(self):
+        assert _is_within_debounce("2020-01-01 00:00:00") is False
+
+    def test_30_seconds_ago_within_debounce(self):
+        from datetime import datetime, timezone, timedelta
+
+        ts = (datetime.now(timezone.utc) - timedelta(seconds=30)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        assert _is_within_debounce(ts) is True
+
+    def test_10_minutes_ago_outside_debounce(self):
+        from datetime import datetime, timezone, timedelta
+
+        ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        assert _is_within_debounce(ts) is False
+
+    def test_exactly_at_boundary(self, monkeypatch):
+        """Just past the debounce window should return False."""
+        from datetime import datetime, timezone, timedelta
+
+        debounce = hook._ERROR_RECALL_DEBOUNCE_SECS
+        ts = (datetime.now(timezone.utc) - timedelta(seconds=debounce + 1)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        assert _is_within_debounce(ts) is False
+
+    def test_malformed_timestamp_returns_false(self):
+        assert _is_within_debounce("not-a-timestamp") is False
+
+    def test_respects_env_override(self, monkeypatch):
+        """FORGEMEMO_ERROR_DEBOUNCE_SECS should control the window."""
+        from datetime import datetime, timezone, timedelta
+        import importlib
+
+        monkeypatch.setenv("FORGEMEMO_ERROR_DEBOUNCE_SECS", "10")
+        importlib.reload(hook)
+
+        # 5 seconds ago — within 10s debounce
+        ts_recent = (datetime.now(timezone.utc) - timedelta(seconds=5)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        assert hook._is_within_debounce(ts_recent) is True
+
+        # 15 seconds ago — outside 10s debounce
+        ts_old = (datetime.now(timezone.utc) - timedelta(seconds=15)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        assert hook._is_within_debounce(ts_old) is False
+
+        # Restore default
+        monkeypatch.delenv("FORGEMEMO_ERROR_DEBOUNCE_SECS", raising=False)
+        importlib.reload(hook)
+
+
+# ---------------------------------------------------------------------------
+# Debounce integration tests for _handle_error_recall
+# ---------------------------------------------------------------------------
+
+
+class TestErrorRecallDebounce:
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        monkeypatch.delenv("FORGEMEMO_PROJECT_ID", raising=False)
+        monkeypatch.setattr(hook, "SOURCE_TOOL", "claude-code")
+
+    def _error_payload(self, **overrides):
+        base = {
+            "tool_name": "Bash",
+            "session_id": "sess-1",
+            "project_id": "/tmp/proj",
+            "tool_result": "TypeError: bad type",
+        }
+        base.update(overrides)
+        return base
+
+    def test_recent_error_debounced(self, monkeypatch):
+        """Error seen 10 times but last occurrence 30s ago → debounced, no recall."""
+        from datetime import datetime, timezone, timedelta
+
+        recent_ts = (datetime.now(timezone.utc) - timedelta(seconds=30)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+        monkeypatch.setattr(
+            hook,
+            "_daemon_get",
+            lambda path, params=None: {"count": 10, "last_ts": recent_ts},
+        )
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert result is None  # debounced — no injection
+
+    def test_old_error_not_debounced(self, monkeypatch, capsys):
+        """Error seen before but last occurrence 10 min ago → recall fires."""
+        from datetime import datetime, timezone, timedelta
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 3, "last_ts": old_ts}
+            if path == "/search":
+                return {"results": [{"id": "d:1", "type": "note", "title": "Fix"}]}
+            if path.startswith("/observation/"):
+                return {"title": "Fix", "narrative": "Do this"}
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert result == 0  # recall fires
+        out = capsys.readouterr().out
+        ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        assert "seen 4 times" in ctx
+
+    def test_first_error_not_affected_by_debounce(self, monkeypatch):
+        """First occurrence (count=0) should always return None, regardless of debounce."""
+        monkeypatch.setattr(
+            hook,
+            "_daemon_get",
+            lambda path, params=None: {"count": 0, "last_ts": None},
+        )
+        posts = []
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: posts.append(data) or {})
+
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert result is None
+        assert len(posts) == 1  # still records the error
+
+    def test_hot_reload_burst_only_fires_once(self, monkeypatch, capsys):
+        """Simulates rapid-fire errors: only the first recall-eligible fires."""
+        from datetime import datetime, timezone, timedelta
+
+        call_count = {"n": 0}
+        # First call: count=1, no last_ts → fires recall
+        # Second call: count=2, recent last_ts → debounced
+        recent_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                call_count["n"] += 1
+                if call_count["n"] == 1:
+                    return {"count": 1, "last_ts": None}  # old enough
+                return {"count": call_count["n"], "last_ts": recent_ts}
+            if path == "/search":
+                return {"results": [{"id": "d:1", "type": "note", "title": "Tip"}]}
+            if path.startswith("/observation/"):
+                return {"title": "Tip", "narrative": "Help"}
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        # First call — should fire
+        r1 = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert r1 == 0
+        capsys.readouterr()  # consume output
+
+        # Rapid subsequent calls — should be debounced
+        for _ in range(5):
+            r = _handle_error_recall(self._error_payload(), "PostToolUse")
+            assert r is None  # debounced
+
+    def test_different_fingerprints_not_debounced(self, monkeypatch, capsys):
+        """Two different errors in quick succession should both fire."""
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 1, "last_ts": None}
+            if path == "/search":
+                return {"results": [{"id": "d:1", "type": "note", "title": "Tip"}]}
+            if path.startswith("/observation/"):
+                return {"title": "Tip", "narrative": "Info"}
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        r1 = _handle_error_recall(self._error_payload(
+            tool_result="TypeError: bad type"
+        ), "PostToolUse")
+        assert r1 == 0
+        capsys.readouterr()
+
+        r2 = _handle_error_recall(self._error_payload(
+            tool_result="ModuleNotFoundError: no module named foo"
+        ), "PostToolUse")
+        assert r2 == 0  # different fingerprint, not debounced

@@ -748,14 +748,17 @@ def create_app() -> Flask:
         try:
             try:
                 row = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM error_events WHERE session_id=? AND fingerprint=?",
+                    "SELECT COUNT(*) as cnt, MAX(ts) as last_ts "
+                    "FROM error_events WHERE session_id=? AND fingerprint=?",
                     (session_id, fingerprint),
                 ).fetchone()
                 count = row["cnt"] if row else 0
+                last_ts = row["last_ts"] if row else None
             except sqlite3.OperationalError:
                 # Table doesn't exist yet
                 count = 0
-            return jsonify({"count": count})
+                last_ts = None
+            return jsonify({"count": count, "last_ts": last_ts})
         finally:
             conn.close()
 

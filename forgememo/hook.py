@@ -388,12 +388,40 @@ def _daemon_post(path: str, data: dict) -> dict:
         return {}
 
 
+# Minimum seconds between error-recall injections for the same fingerprint.
+# Prevents hot-reload loops (next dev, nodemon) from flooding searches.
+_ERROR_RECALL_DEBOUNCE_SECS = int(
+    os.environ.get("FORGEMEMO_ERROR_DEBOUNCE_SECS", "300")
+)
+
+
+def _is_within_debounce(last_ts: str | None) -> bool:
+    """Return True if last_ts is within the debounce window (too soon)."""
+    if not last_ts:
+        return False
+    try:
+        from datetime import datetime, timezone
+
+        # SQLite CURRENT_TIMESTAMP is UTC, format: "YYYY-MM-DD HH:MM:SS"
+        last_dt = datetime.strptime(last_ts, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+        elapsed = (datetime.now(timezone.utc) - last_dt).total_seconds()
+        return elapsed < _ERROR_RECALL_DEBOUNCE_SECS
+    except Exception:
+        return False
+
+
 def _handle_error_recall(payload: dict, event_name: str) -> int | None:
     """Detect repeated errors mid-session and inject relevant memories.
 
     Returns 0 with context printed if a repeated error was found and memories
     were injected. Returns None if no error or no repeat — caller should
     continue with normal PostToolUse handling.
+
+    Debounced: at most one injection per error fingerprint per
+    _ERROR_RECALL_DEBOUNCE_SECS (default 300s / 5 min) to avoid flooding
+    from hot-reload loops (next dev, nodemon, etc.).
     """
     error_text = _extract_error_text(payload)
     if not error_text:
@@ -427,6 +455,13 @@ def _handle_error_recall(payload: dict, event_name: str) -> int | None:
 
     if prior_count < 1:
         # First occurrence — no recall needed
+        return None
+
+    # Debounce: skip if we already injected context for this error recently.
+    # This prevents hot-reload loops from flooding searches and exhausting
+    # the agent's context window.
+    last_ts = check.get("last_ts")
+    if _is_within_debounce(last_ts):
         return None
 
     # Repeated error! Search memories for relevant lessons

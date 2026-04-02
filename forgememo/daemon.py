@@ -100,22 +100,26 @@ except OSError:
         os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
     else:
         raise
+_log_handlers: list[logging.Handler] = [logging.FileHandler(LOG_FILE)]
+if os.environ.get("FORGEMEMO_LOG_STDERR", "1") != "0":
+    _log_handlers.append(logging.StreamHandler())
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
-    handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
+    handlers=_log_handlers,
 )
 logger = logging.getLogger(__name__)
 
-_migration_handler = logging.StreamHandler(sys.stderr)
-_migration_handler.setLevel(logging.INFO)
-_migration_handler.setFormatter(
-    logging.Formatter("[%(asctime)s] MIGRATION: %(message)s")
-)
 migration_logger = logging.getLogger("forgememo.migration")
-migration_logger.addHandler(_migration_handler)
 migration_logger.setLevel(logging.INFO)
 migration_logger.propagate = False
+if os.environ.get("FORGEMEMO_LOG_STDERR", "1") != "0":
+    _migration_handler = logging.StreamHandler(sys.stderr)
+    _migration_handler.setLevel(logging.INFO)
+    _migration_handler.setFormatter(
+        logging.Formatter("[%(asctime)s] MIGRATION: %(message)s")
+    )
+    migration_logger.addHandler(_migration_handler)
 
 _write_lock = threading.Lock()
 
@@ -1086,11 +1090,14 @@ def main():
             logger.info(f"Starting HTTP server on 127.0.0.1:{port} (Windows mode)...")
             http_server = make_server("127.0.0.1", port, app, threaded=True)
             write_port(port)
+            from forgememo.port import write_pid, delete_pid as _delete_pid
+            write_pid(os.getpid())
             logger.info("Health check: curl http://127.0.0.1:%s/health", port)
             try:
                 http_server.serve_forever()
             finally:
                 delete_port()
+                _delete_pid()
         else:
             # POSIX: UNIX socket primary, HTTP optional
             socket_host = f"unix://{SOCKET_PATH}"

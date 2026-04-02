@@ -64,6 +64,42 @@ def delete_port() -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# PID lockfile — written by the daemon after binding, removed on clean exit.
+# Clients use this to send targeted signals instead of process-name kills.
+# ---------------------------------------------------------------------------
+
+PID_FILE = _FORGEMEMO_DIR / "daemon.pid"
+
+
+def write_pid(pid: int) -> None:
+    """Atomically write the daemon PID to the lockfile."""
+    _FORGEMEMO_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = PID_FILE.with_suffix(".pid.tmp")
+    tmp.write_text(str(pid))
+    tmp.replace(PID_FILE)
+
+
+def read_pid() -> int | None:
+    """Return the PID from the lockfile, or None if absent/invalid.
+
+    Does NOT validate liveness — caller is responsible for that check.
+    On Windows use _win_pid_alive(); on POSIX use os.kill(pid, 0).
+    """
+    try:
+        return int(PID_FILE.read_text().strip())
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+
+def delete_pid() -> None:
+    """Remove the PID lockfile on clean daemon shutdown."""
+    try:
+        PID_FILE.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _port_listening(port: int) -> bool:
     """Return True if something is accepting connections on 127.0.0.1:port."""
     try:

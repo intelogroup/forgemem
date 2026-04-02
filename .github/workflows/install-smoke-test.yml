@@ -508,3 +508,142 @@ jobs:
           "
         env:
           FORGEMEMO_HTTP_PORT: "5555"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Job 5: Windows daemon lifecycle — install, start, health, stop
+  # Tests the PID-based daemon lifecycle on windows-latest.
+  # ═══════════════════════════════════════════════════════════════════
+  windows-daemon-lifecycle:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install forgememo
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Verify entry points
+        run: |
+          forgememo --version
+          python -m forgememo --version
+
+      - name: Setup agent config dirs
+        run: |
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\.claude" | Out-Null
+          '{}' | Set-Content "$env:USERPROFILE\.claude\settings.json"
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\.gemini" | Out-Null
+          New-Item -ItemType Directory -Force "$env:USERPROFILE\.codex" | Out-Null
+
+      - name: Init forgememo (non-interactive)
+        run: forgememo init --yes --provider claude_code
+        env:
+          FORGEMEMO_HTTP_PORT: "5556"
+
+      - name: Start daemon
+        run: forgememo start
+        env:
+          FORGEMEMO_HTTP_PORT: "5556"
+
+      - name: Verify PID file exists
+        run: |
+          $pidFile = "$env:USERPROFILE\.forgememo\daemon.pid"
+          if (-not (Test-Path $pidFile)) {
+            Write-Error "PID file not found: $pidFile"
+            exit 1
+          }
+          $daemonPid = Get-Content $pidFile
+          Write-Host "Daemon PID: $daemonPid"
+
+      - name: Verify daemon health endpoint
+        run: |
+          python -c "
+          import urllib.request, json, sys, time
+          url = 'http://127.0.0.1:5556/health'
+          for i in range(15):
+              try:
+                  resp = urllib.request.urlopen(url, timeout=2)
+                  data = json.loads(resp.read())
+                  if data.get('ok'):
+                      print(f'Health OK after {i+1}s')
+                      sys.exit(0)
+              except Exception:
+                  pass
+              time.sleep(1)
+          print('FAIL: daemon not healthy after 15s')
+          sys.exit(1)
+          "
+        env:
+          FORGEMEMO_HTTP_PORT: "5556"
+
+      - name: forgememo status reports daemon running
+        run: |
+          python -c "
+          import subprocess, sys
+          r = subprocess.run(['forgememo', 'status'], capture_output=True, text=True)
+          print(r.stdout)
+          if 'running' not in r.stdout.lower():
+              print('FAIL: expected running in status output')
+              sys.exit(1)
+          "
+        env:
+          FORGEMEMO_HTTP_PORT: "5556"
+
+      - name: Event write roundtrip
+        run: |
+          python -c "
+          import urllib.request, json, time, uuid
+          base = 'http://127.0.0.1:5556'
+          probe = f'ci-win-{uuid.uuid4().hex[:8]}'
+          payload = json.dumps({
+              'session_id': probe, 'project_id': probe,
+              'source_tool': 'ci', 'event_type': 'win_smoke',
+              'tool_name': 'smoke', 'payload': json.dumps({'msg': probe}),
+              'seq': int(time.time() * 1000),
+          }).encode()
+          req = urllib.request.Request(
+              f'{base}/events', data=payload,
+              headers={'Content-Type': 'application/json'}, method='POST',
+          )
+          resp = urllib.request.urlopen(req, timeout=5)
+          assert resp.status == 201, f'write failed: {resp.status}'
+          print('Event write OK')
+          "
+        env:
+          FORGEMEMO_HTTP_PORT: "5556"
+
+      - name: Stop daemon
+        run: forgememo stop
+        env:
+          FORGEMEMO_HTTP_PORT: "5556"
+
+      - name: Verify daemon is stopped
+        run: |
+          python -c "
+          import socket, sys
+          s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+          s.settimeout(2)
+          result = s.connect_ex(('127.0.0.1', 5556))
+          s.close()
+          if result == 0:
+              print('FAIL: port still listening after stop')
+              sys.exit(1)
+          print('Daemon stopped OK')
+          "
+
+      - name: Show daemon log on failure
+        if: failure()
+        run: |
+          $logPath = "$env:USERPROFILE\.forgememo\logs\forgememo_daemon.log"
+          if (Test-Path $logPath) {
+            Write-Host "=== Last 50 lines of daemon log ==="
+            Get-Content $logPath -Tail 50
+          } else {
+            Write-Host "(no daemon log found at $logPath)"
+          }

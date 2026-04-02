@@ -215,57 +215,23 @@ def _do_start(
         raise typer.Exit(0)
 
     if sys.platform == "win32":
-        # Use sys.executable -m forgememo so we always have an absolute interpreter
-        # path. shutil.which("forgememo") returns None when Scripts/ is not in PATH
-        # (common with user-scoped pip installs), leaving a bare "forgememo" that
-        # Task Scheduler and Popen cannot resolve.
+        from forgememo.commands._windows import (
+            _win_health_check,
+            _win_log_path,
+            _win_start_daemon,
+        )
+        from forgememo.port import write_pid
+
         http_port = str(read_port())
         py = sys.executable
-        task_cmd = f'"{py}" -m forgememo daemon'
-        worker_cmd = f'"{py}" -m forgememo worker'
-        for tn, tr in [("Forgememo Daemon", task_cmd), ("Forgememo Worker", worker_cmd)]:
-            r = subprocess.run(
-                ["schtasks", "/create", "/tn", tn, "/tr", tr, "/sc", "ONLOGON", "/f"],
-                capture_output=True, text=True, check=False,
-            )
-            if r.returncode == 0:
-                console.print(f"[green]Task Scheduler task created:[/] {tn}")
-            else:
-                console.print(f"[yellow]schtasks failed for '{tn}':[/] {r.stderr.strip()}")
-        env = os.environ.copy()
-        env["FORGEMEMO_HTTP_PORT"] = http_port
-        # DEVNULL for all std streams — daemon must not inherit the parent's
-        # console handles. When init exits those handles close, crashing Flask.
-        proc = subprocess.Popen(
-            [py, "-m", "forgememo", "daemon"],
-            env=env,
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        proc = _win_start_daemon(http_port, py)
+        if not _win_health_check(http_port, proc):
+            console.print(f"[red]Daemon failed to start.[/] Check logs: {_win_log_path()}")
+            raise typer.Exit(1)
+        write_pid(proc.pid)
+        console.print(
+            f"[green]Daemon started and healthy[/] on http://127.0.0.1:{http_port} (PID {proc.pid})"
         )
-        import time as _time
-        import urllib.request as _urllib
-        healthy = False
-        for _i in range(15):
-            if proc.poll() is not None:
-                console.print(f"[red]Daemon process exited (code {proc.returncode}) before becoming healthy[/]")
-                raise typer.Exit(1)
-            try:
-                _urllib.urlopen(f"http://127.0.0.1:{http_port}/health", timeout=1)
-                healthy = True
-                break
-            except Exception:
-                _time.sleep(1)
-        if healthy:
-            # Stabilization: confirm daemon stays up for 2 more seconds
-            _time.sleep(2)
-            if proc.poll() is not None:
-                console.print(f"[red]Daemon exited immediately after health check (code {proc.returncode})[/]")
-                raise typer.Exit(1)
-            console.print(f"[green]Daemon started and healthy[/] on http://127.0.0.1:{http_port} (PID {proc.pid})")
-        else:
-            console.print("[yellow]Daemon spawned but health check timed out[/] — run: forgememo doctor")
         raise typer.Exit(0)
 
     if sys.platform != "darwin":
@@ -535,31 +501,10 @@ def stop():
         raise typer.Exit(0)
 
     if sys.platform == "win32":
-        import socket as _sock
+        from forgememo.commands._windows import _win_stop_daemon
 
         http_port = str(read_port())
-        try:
-            with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
-                _s.settimeout(1)
-                alive = _s.connect_ex(("127.0.0.1", int(http_port))) == 0
-        except Exception:
-            alive = False
-        if alive:
-            result = subprocess.run(
-                ["taskkill", "/f", "/im", "forgememo.exe"],
-                capture_output=True, text=True, check=False,
-            )
-            if result.returncode == 0:
-                console.print("[green]Forgememo processes stopped.[/]")
-            else:
-                console.print(f"[yellow]Could not stop processes:[/] {result.stderr.strip()}")
-        else:
-            console.print("[dim]Daemon not running.[/]")
-        for tn in ("Forgememo Daemon", "Forgememo Worker"):
-            subprocess.run(
-                ["schtasks", "/delete", "/tn", tn, "/f"],
-                capture_output=True, text=True, check=False,
-            )
+        _win_stop_daemon(http_port)
         raise typer.Exit(0)
 
     if sys.platform != "darwin":
@@ -928,6 +873,13 @@ def doctor():
         _pass(f"Daemon reachable at {daemon_url}")
     else:
         _fail("Daemon not reachable \u2014 run: forgememo start")
+        if sys.platform == "win32":
+            from forgememo.commands._windows import _win_log_path, _tail_log
+
+            tail = _tail_log(20)
+            if tail:
+                console.print(f"\n  [dim]Last 20 lines of {_win_log_path()}:[/]")
+                console.print(f"  [dim]{tail}[/]")
         console.print(f"\n  [bold]{checks_passed} passed, {checks_failed} failed[/]")
         console.print("  [dim]Fix daemon connectivity before running write/search tests.[/]")
         raise typer.Exit(1)

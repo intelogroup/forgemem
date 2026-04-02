@@ -215,12 +215,14 @@ def _do_start(
         raise typer.Exit(0)
 
     if sys.platform == "win32":
-        forgememo_bin = shutil.which("forgememo") or "forgememo"
+        # Use sys.executable -m forgememo so we always have an absolute interpreter
+        # path. shutil.which("forgememo") returns None when Scripts/ is not in PATH
+        # (common with user-scoped pip installs), leaving a bare "forgememo" that
+        # Task Scheduler and Popen cannot resolve.
         http_port = str(read_port())
-        # Use direct exe invocation — no cmd /c wrapper avoids cmd.exe quoting
-        # hell. Port is discovered via lockfile so no env var needed in the task.
-        task_cmd = f'"{forgememo_bin}" daemon'
-        worker_cmd = f'"{forgememo_bin}" worker'
+        py = sys.executable
+        task_cmd = f'"{py}" -m forgememo daemon'
+        worker_cmd = f'"{py}" -m forgememo worker'
         for tn, tr in [("Forgememo Daemon", task_cmd), ("Forgememo Worker", worker_cmd)]:
             r = subprocess.run(
                 ["schtasks", "/create", "/tn", tn, "/tr", tr, "/sc", "ONLOGON", "/f"],
@@ -234,8 +236,8 @@ def _do_start(
         env["FORGEMEMO_HTTP_PORT"] = http_port
         # DEVNULL for all std streams — daemon must not inherit the parent's
         # console handles. When init exits those handles close, crashing Flask.
-        subprocess.Popen(
-            [forgememo_bin, "daemon"],
+        proc = subprocess.Popen(
+            [py, "-m", "forgememo", "daemon"],
             env=env,
             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
             stdin=subprocess.DEVNULL,
@@ -244,15 +246,26 @@ def _do_start(
         )
         import time as _time
         import urllib.request as _urllib
-        for _i in range(10):
+        healthy = False
+        for _i in range(15):
+            if proc.poll() is not None:
+                console.print(f"[red]Daemon process exited (code {proc.returncode}) before becoming healthy[/]")
+                raise typer.Exit(1)
             try:
                 _urllib.urlopen(f"http://127.0.0.1:{http_port}/health", timeout=1)
-                console.print(f"[green]Daemon started and healthy[/] on http://127.0.0.1:{http_port}")
+                healthy = True
                 break
             except Exception:
                 _time.sleep(1)
+        if healthy:
+            # Stabilization: confirm daemon stays up for 2 more seconds
+            _time.sleep(2)
+            if proc.poll() is not None:
+                console.print(f"[red]Daemon exited immediately after health check (code {proc.returncode})[/]")
+                raise typer.Exit(1)
+            console.print(f"[green]Daemon started and healthy[/] on http://127.0.0.1:{http_port} (PID {proc.pid})")
         else:
-            console.print("[yellow]Daemon spawned but health check timed out[/] — check logs at %TEMP%\\forgememo_daemon.log")
+            console.print("[yellow]Daemon spawned but health check timed out[/] — run: forgememo doctor")
         raise typer.Exit(0)
 
     if sys.platform != "darwin":

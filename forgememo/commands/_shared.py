@@ -249,10 +249,19 @@ def _generate_skill(agent: str, dry_run: bool = False) -> None:
 
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
+        # Probe writeability before the real write — gives a cleaner error
+        # message and avoids partial writes on permission-denied paths (common
+        # on Windows where Codex may own ~/.codex with restricted ACLs).
+        probe = dest.with_suffix(".tmp")
+        probe.write_text("")
+        probe.unlink()
         dest.write_text(template.read_text())
         console.print(f"  [green]wrote[/] {dest}")
-    except PermissionError as exc:
-        console.print(f"  [yellow]warning:[/] could not write skill file {dest}: {exc}")
+    except PermissionError:
+        console.print(
+            f"  [yellow]skipped:[/] {dest} "
+            "(permission denied — run as admin or grant write access to that directory)"
+        )
 
 
 def _auto_detect_and_generate_skills(yes: bool) -> None:

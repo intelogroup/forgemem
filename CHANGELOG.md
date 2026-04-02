@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.4.13] — 2026-04-02
+
+### Fixed
+- Windows daemon: use `pythonw.exe` to avoid console flashes and handle locks
+- Windows daemon: `DEVNULL` for parent stdout/stderr; daemon redirects its own streams to log file
+- Windows daemon: `close_fds=True` to prevent inherited handle races
+- Pass `FORGEMEMO_LOG_PATH` env var so daemon knows where to write
+
 ## [0.4.12] — 2026-04-02
 
 ### Fixed

@@ -1060,6 +1060,17 @@ def _check_port(host: str, port: int) -> bool:
 
 
 def main():
+    # On Windows, redirect stdout/stderr to log file since parent uses DEVNULL
+    if sys.platform == "win32":
+        _log_path = os.environ.get(
+            "FORGEMEMO_LOG_PATH",
+            str(Path.home() / ".forgememo" / "logs" / "forgememo_daemon.log"),
+        )
+        Path(_log_path).parent.mkdir(parents=True, exist_ok=True)
+        _log_fd = open(_log_path, "a", encoding="utf-8", buffering=1)
+        sys.stdout = _log_fd
+        sys.stderr = _log_fd
+
     logger.info("=" * 80)
     logger.info("Forgememo Daemon Starting")
     logger.info("=" * 80)

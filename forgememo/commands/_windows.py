@@ -88,14 +88,13 @@ def _print_crash_diagnostic() -> None:
 def _win_start_daemon(http_port: str, py: str) -> subprocess.Popen:
     """Spawn the daemon as a detached Windows process.
 
-    Key differences from the old approach:
-    - stdout/stderr → log file (not DEVNULL): Flask writes to stderr on bind
-      errors; DEVNULL makes those invisible, causing silent crashes.
-    - FORGEMEMO_LOG_STDERR=0: tells daemon.py to skip its StreamHandler so
-      there's no double-write attempt to a potentially closed console handle.
-    - CREATE_NO_WINDOW: prevents console flash and survives parent window close.
-    - close_fds=False: required so the child inherits the open log_fd handle.
-      The parent closes log_fd immediately after Popen returns.
+    Uses the "Holy Trinity" of Windows creation flags:
+    - DETACHED_PROCESS: no console window
+    - CREATE_NEW_PROCESS_GROUP: separate process group
+    - CREATE_BREAKAWAY_FROM_JOB: escape parent's Job Object
+
+    stdout/stderr → DEVNULL (daemon.py redirects its own streams to log file).
+    close_fds=True: no inherited handles from parent.
     """
     log = _win_log_path()
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -103,41 +102,44 @@ def _win_start_daemon(http_port: str, py: str) -> subprocess.Popen:
     env = os.environ.copy()
     env["FORGEMEMO_HTTP_PORT"] = http_port
     env["FORGEMEMO_LOG_STDERR"] = "0"
+    env["FORGEMEMO_LOG_PATH"] = str(log)
 
-    log_fd = open(log, "a", encoding="utf-8")
+    # Prefer pythonw.exe to avoid console flashes and handle locks
+    if py.endswith("python.exe"):
+        py_w = py.replace("python.exe", "pythonw.exe")
+        if os.path.exists(py_w):
+            py = py_w
+
+    _base_flags = (
+        subprocess.DETACHED_PROCESS
+        | subprocess.CREATE_NEW_PROCESS_GROUP
+        | subprocess.CREATE_NO_WINDOW
+    )
+    _popen_kwargs: dict = dict(
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
     try:
-        _base_flags = (
-            subprocess.DETACHED_PROCESS
-            | subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.CREATE_NO_WINDOW
+        proc = subprocess.Popen(
+            [py, "-m", "forgememo", "daemon"],
+            creationflags=_base_flags | _CREATE_BREAKAWAY_FROM_JOB,
+            **_popen_kwargs,
         )
-        _popen_kwargs: dict = dict(
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=log_fd,
-            stderr=log_fd,
-            close_fds=False,  # child must inherit log_fd
+    except OSError:
+        # Job Object was created without JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        # fall back without breakaway — daemon may be killed on parent exit.
+        console.print(
+            "[yellow]Note: CREATE_BREAKAWAY_FROM_JOB not available, "
+            "daemon may be killed when parent exits.[/]"
         )
-        try:
-            proc = subprocess.Popen(
-                [py, "-m", "forgememo", "daemon"],
-                creationflags=_base_flags | _CREATE_BREAKAWAY_FROM_JOB,
-                **_popen_kwargs,
-            )
-        except OSError:
-            # Job Object was created without JOB_OBJECT_LIMIT_BREAKAWAY_OK;
-            # fall back without breakaway — daemon may be killed on parent exit.
-            console.print(
-                "[yellow]Note: CREATE_BREAKAWAY_FROM_JOB not available, "
-                "daemon may be killed when parent exits.[/]"
-            )
-            proc = subprocess.Popen(
-                [py, "-m", "forgememo", "daemon"],
-                creationflags=_base_flags,
-                **_popen_kwargs,
-            )
-    finally:
-        log_fd.close()  # parent no longer needs the handle
+        proc = subprocess.Popen(
+            [py, "-m", "forgememo", "daemon"],
+            creationflags=_base_flags,
+            **_popen_kwargs,
+        )
 
     return proc
 

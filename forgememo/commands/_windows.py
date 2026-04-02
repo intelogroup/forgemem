@@ -20,13 +20,12 @@ import ctypes
 import ctypes.wintypes
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 
 from rich.console import Console
 
-from forgememo.port import delete_pid, read_pid, write_pid
+from forgememo.port import delete_pid, read_pid
 
 console = Console()
 
@@ -95,7 +94,7 @@ def _win_start_daemon(http_port: str, py: str) -> subprocess.Popen:
     env["FORGEMEMO_HTTP_PORT"] = http_port
     env["FORGEMEMO_LOG_STDERR"] = "0"
 
-    log_fd = open(log, "a", encoding="utf-8")  # noqa: WPS515
+    log_fd = open(log, "a", encoding="utf-8")
     try:
         proc = subprocess.Popen(
             [py, "-m", "forgememo", "daemon"],

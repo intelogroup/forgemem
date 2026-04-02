@@ -150,7 +150,7 @@ class TestDaemonLogFallback:
                 fell_back = True
 
             assert fell_back, "Expected OSError creating log dir in read-only parent"
-            assert fallback.startswith("/tmp"), f"Fallback not in /tmp: {fallback}"
+            assert fallback.startswith(tempfile.gettempdir()), f"Fallback not in tempdir: {fallback}"
         finally:
             os.chmod(readonly, stat.S_IRWXU)
 

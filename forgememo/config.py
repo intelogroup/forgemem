@@ -36,6 +36,8 @@ def load() -> dict:
 
 def save(cfg: dict) -> None:
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":  # POSIX: config dir may contain API keys
+        os.chmod(CONFIG_PATH.parent, 0o700)
     CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
 
 

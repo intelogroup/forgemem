@@ -820,3 +820,129 @@ class TestInferenceErrorPaths:
         monkeypatch.setattr("forgememo.inference._call_anthropic", fake_anthropic)
         inference.call("hello", model="custom-model-override")
         assert received["model"] == "custom-model-override"
+
+
+# ---------------------------------------------------------------------------
+# POST /error_events + GET /error_events
+# ---------------------------------------------------------------------------
+
+
+class TestErrorEvents:
+    def test_post_error_event_returns_201(self, client):
+        r = client.post("/error_events", json={
+            "session_id": "sess-err",
+            "project_id": "/tmp/proj",
+            "fingerprint": "abc123",
+            "error_keywords": "TypeError bad type",
+            "error_text": "TypeError: bad type conversion",
+        })
+        assert r.status_code == 201
+
+    def test_missing_session_id_returns_400(self, client):
+        r = client.post("/error_events", json={
+            "fingerprint": "abc",
+        })
+        assert r.status_code == 400
+
+    def test_missing_fingerprint_returns_400(self, client):
+        r = client.post("/error_events", json={
+            "session_id": "sess-1",
+        })
+        assert r.status_code == 400
+
+    def test_get_error_count_zero_initially(self, client):
+        r = client.get("/error_events?session_id=sess-new&fingerprint=xyz")
+        assert r.status_code == 200
+        assert r.get_json()["count"] == 0
+
+    def test_get_error_count_increments(self, client):
+        for _ in range(3):
+            client.post("/error_events", json={
+                "session_id": "sess-cnt",
+                "fingerprint": "fp1",
+            })
+        r = client.get("/error_events?session_id=sess-cnt&fingerprint=fp1")
+        assert r.get_json()["count"] == 3
+
+    def test_different_fingerprints_independent(self, client):
+        client.post("/error_events", json={
+            "session_id": "sess-fp",
+            "fingerprint": "fp-a",
+        })
+        client.post("/error_events", json={
+            "session_id": "sess-fp",
+            "fingerprint": "fp-b",
+        })
+        r = client.get("/error_events?session_id=sess-fp&fingerprint=fp-a")
+        assert r.get_json()["count"] == 1
+        r = client.get("/error_events?session_id=sess-fp&fingerprint=fp-b")
+        assert r.get_json()["count"] == 1
+
+    def test_different_sessions_independent(self, client):
+        client.post("/error_events", json={
+            "session_id": "sess-x",
+            "fingerprint": "same-fp",
+        })
+        r = client.get("/error_events?session_id=sess-y&fingerprint=same-fp")
+        assert r.get_json()["count"] == 0
+
+    def test_get_missing_params_returns_400(self, client):
+        r = client.get("/error_events?session_id=s1")
+        assert r.status_code == 400
+        r = client.get("/error_events?fingerprint=fp")
+        assert r.status_code == 400
+
+    def test_private_stripped_from_error_text(self, client):
+        client.post("/error_events", json={
+            "session_id": "sess-priv",
+            "fingerprint": "fp-priv",
+            "error_text": "Error with <private>SECRET_KEY</private> in output",
+        })
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT error_text FROM error_events WHERE session_id='sess-priv'"
+        ).fetchone()
+        conn.close()
+        assert "SECRET_KEY" not in row["error_text"]
+
+    def test_get_returns_last_recalled_at(self, client):
+        """GET should return last_recalled_at field."""
+        r = client.get("/error_events?session_id=sess-new&fingerprint=xyz")
+        data = r.get_json()
+        assert "last_recalled_at" in data
+        assert data["last_recalled_at"] is None
+
+    def test_recall_endpoint_marks_recalled(self, client):
+        """POST /error_events/recall updates recalled_at on the latest row."""
+        client.post("/error_events", json={
+            "session_id": "sess-recall",
+            "fingerprint": "fp-recall",
+        })
+        r = client.post("/error_events/recall", json={
+            "session_id": "sess-recall",
+            "fingerprint": "fp-recall",
+        })
+        assert r.status_code == 200
+
+        r = client.get("/error_events?session_id=sess-recall&fingerprint=fp-recall")
+        data = r.get_json()
+        assert data["last_recalled_at"] is not None
+
+    def test_recall_endpoint_missing_params_returns_400(self, client):
+        r = client.post("/error_events/recall", json={"session_id": "s1"})
+        assert r.status_code == 400
+        r = client.post("/error_events/recall", json={"fingerprint": "fp"})
+        assert r.status_code == 400
+
+    def test_recall_does_not_affect_count(self, client):
+        """Marking recalled should not change the error count."""
+        client.post("/error_events", json={
+            "session_id": "sess-rc",
+            "fingerprint": "fp-rc",
+        })
+        client.post("/error_events/recall", json={
+            "session_id": "sess-rc",
+            "fingerprint": "fp-rc",
+        })
+        r = client.get("/error_events?session_id=sess-rc&fingerprint=fp-rc")
+        assert r.get_json()["count"] == 1  # recall doesn't add a row

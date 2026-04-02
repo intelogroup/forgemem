@@ -117,6 +117,20 @@ CREATE INDEX IF NOT EXISTS idx_ss_session ON session_summaries(session_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS session_summaries_fts
   USING fts5(request, learnings, next_steps, concepts, project_id);
+
+-- Error tracking for mid-session recall
+CREATE TABLE IF NOT EXISTS error_events (
+  id              INTEGER PRIMARY KEY,
+  ts              DATETIME DEFAULT CURRENT_TIMESTAMP,
+  session_id      TEXT NOT NULL,
+  project_id      TEXT,
+  fingerprint     TEXT NOT NULL,
+  error_keywords  TEXT,
+  error_text      TEXT,
+  recalled_at     DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_error_session_fp ON error_events(session_id, fingerprint);
+CREATE INDEX IF NOT EXISTS idx_error_project ON error_events(project_id);
 """
 
 

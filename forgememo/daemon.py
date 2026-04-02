@@ -678,6 +678,138 @@ def create_app() -> Flask:
         finally:
             conn.close()
 
+    @app.route("/error_events", methods=["POST"])
+    def post_error_event():
+        data = request.get_json(silent=True) or {}
+        session_id = data.get("session_id")
+        fingerprint = data.get("fingerprint")
+        if not session_id or not fingerprint:
+            return jsonify({"error": "session_id and fingerprint required"}), 400
+
+        error_text = strip_private(data.get("error_text") or "")
+
+        with _write_lock:
+            conn = get_conn()
+            try:
+                conn.execute(
+                    "INSERT INTO error_events (session_id, project_id, fingerprint, error_keywords, error_text) "
+                    "VALUES (?,?,?,?,?)",
+                    (
+                        session_id,
+                        data.get("project_id"),
+                        fingerprint,
+                        data.get("error_keywords"),
+                        error_text[:1000] if error_text else None,
+                    ),
+                )
+                conn.commit()
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if "no such table" not in msg:
+                    logger.warning("error_events INSERT failed: %s", e)
+                    conn.close()
+                    return jsonify({"error": "db_error", "message": str(e)}), 503
+                # Table may not exist yet on older DBs — create it inline
+                try:
+                    conn.executescript(
+                        "CREATE TABLE IF NOT EXISTS error_events ("
+                        "  id INTEGER PRIMARY KEY,"
+                        "  ts DATETIME DEFAULT CURRENT_TIMESTAMP,"
+                        "  session_id TEXT NOT NULL,"
+                        "  project_id TEXT,"
+                        "  fingerprint TEXT NOT NULL,"
+                        "  error_keywords TEXT,"
+                        "  error_text TEXT,"
+                        "  recalled_at DATETIME"
+                        ");"
+                        "CREATE INDEX IF NOT EXISTS idx_error_session_fp ON error_events(session_id, fingerprint);"
+                        "CREATE INDEX IF NOT EXISTS idx_error_project ON error_events(project_id);"
+                    )
+                    conn.execute(
+                        "INSERT INTO error_events (session_id, project_id, fingerprint, error_keywords, error_text) "
+                        "VALUES (?,?,?,?,?)",
+                        (
+                            session_id,
+                            data.get("project_id"),
+                            fingerprint,
+                            data.get("error_keywords"),
+                            error_text[:1000] if error_text else None,
+                        ),
+                    )
+                    conn.commit()
+                except Exception as e:
+                    logger.warning("Failed to create error_events table inline: %s", e, exc_info=True)
+                    conn.close()
+                    return jsonify({"error": "db_error", "message": str(e)}), 503
+            finally:
+                conn.close()
+
+        return jsonify({"status": "ok"}), 201
+
+    @app.route("/error_events", methods=["GET"])
+    def get_error_events():
+        session_id = request.args.get("session_id")
+        fingerprint = request.args.get("fingerprint")
+        if not session_id or not fingerprint:
+            return jsonify({"error": "session_id and fingerprint required"}), 400
+
+        conn = get_conn()
+        try:
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) as cnt, MAX(ts) as last_ts, MAX(recalled_at) as last_recalled_at "
+                    "FROM error_events WHERE session_id=? AND fingerprint=?",
+                    (session_id, fingerprint),
+                ).fetchone()
+                count = row["cnt"] if row else 0
+                last_ts = row["last_ts"] if row else None
+                last_recalled_at = row["last_recalled_at"] if row else None
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if "no such table" in msg or "no such column" in msg:
+                    count = 0
+                    last_ts = None
+                    last_recalled_at = None
+                else:
+                    conn.close()
+                    return jsonify({"error": "db_error", "message": str(e)}), 503
+            return jsonify({"count": count, "last_ts": last_ts, "last_recalled_at": last_recalled_at})
+        finally:
+            conn.close()
+
+    @app.route("/error_events/recall", methods=["POST"])
+    def mark_error_recalled():
+        """Record that a recall/injection happened for a session+fingerprint."""
+        data = request.get_json(silent=True) or {}
+        session_id = data.get("session_id")
+        fingerprint = data.get("fingerprint")
+        if not session_id or not fingerprint:
+            return jsonify({"error": "session_id and fingerprint required"}), 400
+
+        with _write_lock:
+            conn = get_conn()
+            try:
+                # Update the most recent row for this session+fingerprint
+                conn.execute(
+                    "UPDATE error_events SET recalled_at=CURRENT_TIMESTAMP "
+                    "WHERE id=(SELECT id FROM error_events "
+                    "WHERE session_id=? AND fingerprint=? ORDER BY ts DESC LIMIT 1)",
+                    (session_id, fingerprint),
+                )
+                conn.commit()
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if "locked" in msg:
+                    logger.error("mark_error_recalled DB locked: %s", e)
+                    conn.close()
+                    return jsonify({"error": "db_locked", "message": str(e)}), 503
+                # "no such table" or "no such column" — best-effort, recall already succeeded
+                logger.debug("mark_error_recalled skipped: %s", e)
+            finally:
+                conn.close()
+
+        return jsonify({"status": "ok"}), 200
+
     return app
 
 

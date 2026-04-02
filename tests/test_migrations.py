@@ -120,7 +120,13 @@ class TestMigrateToV2:
         conn.close()
 
         assert all(r == r.lower() for r in rows)
-        assert "/users/developer/projecta" in rows[0]
+        # On macOS: path is /users/developer/projecta
+        # On Windows: path is d:\users\developer\projecta
+        normalized_path = rows[0].lower()
+        assert (
+            "users/developer/projecta" in normalized_path
+            or "users\\developer\\projecta" in normalized_path
+        )
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific test")
     def test_normalizes_mixed_case_on_windows(self, isolated_db, monkeypatch):

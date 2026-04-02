@@ -1771,23 +1771,24 @@ class TestIsWithinDebounce:
         import importlib
 
         monkeypatch.setenv("FORGEMEMO_ERROR_DEBOUNCE_SECS", "10")
-        importlib.reload(hook)
+        try:
+            importlib.reload(hook)
 
-        # 5 seconds ago — within 10s debounce
-        ts_recent = (datetime.now(timezone.utc) - timedelta(seconds=5)).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-        assert hook._is_within_debounce(ts_recent) is True
+            # 5 seconds ago — within 10s debounce
+            ts_recent = (datetime.now(timezone.utc) - timedelta(seconds=5)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            assert hook._is_within_debounce(ts_recent) is True
 
-        # 15 seconds ago — outside 10s debounce
-        ts_old = (datetime.now(timezone.utc) - timedelta(seconds=15)).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-        assert hook._is_within_debounce(ts_old) is False
-
-        # Restore default
-        monkeypatch.delenv("FORGEMEMO_ERROR_DEBOUNCE_SECS", raising=False)
-        importlib.reload(hook)
+            # 15 seconds ago — outside 10s debounce
+            ts_old = (datetime.now(timezone.utc) - timedelta(seconds=15)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            assert hook._is_within_debounce(ts_old) is False
+        finally:
+            # Always restore default, even if assertions fail
+            monkeypatch.delenv("FORGEMEMO_ERROR_DEBOUNCE_SECS", raising=False)
+            importlib.reload(hook)
 
 
 # ---------------------------------------------------------------------------

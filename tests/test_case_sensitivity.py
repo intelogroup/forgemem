@@ -143,19 +143,12 @@ class TestProjectIdCasing:
         assert len(results) >= 1
 
     def test_different_case_project_id_no_cross_match(self, client):
-        """On case-sensitive FS, /tmp/MyProject != /tmp/myproject."""
+        """SQLite uses case-sensitive = comparison, so different casing shouldn't match."""
         self._insert_summary("/tmp/MyProject", "Case Test Beta", "Beta narrative")
         r = client.get("/search?q=Beta&project_id=/tmp/myproject&k=5")
         results = r.get_json().get("results", [])
         # SQLite is case-sensitive by default for = comparisons
-        # So this should NOT match (or match only if using LIKE/COLLATE NOCASE)
-        # This verifies the actual behavior — documenting it either way
-        if results:
-            # If it matches, project_id comparison is case-insensitive (like macOS FS)
-            pass
-        else:
-            # Expected on case-sensitive systems
-            assert len(results) == 0
+        assert len(results) == 0, "Expected case-sensitive project_id matching in SQLite"
 
 
 # ─── Error events with mixed-case session IDs ───────────────────────────────

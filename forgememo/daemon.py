@@ -738,7 +738,9 @@ def create_app() -> Flask:
                     )
                     conn.commit()
                 except Exception as e:
-                    logger.warning("Failed to create error_events table inline: %s", e)
+                    logger.warning("Failed to create error_events table inline: %s", e, exc_info=True)
+                    conn.close()
+                    return jsonify({"error": "db_error", "message": str(e)}), 503
             finally:
                 conn.close()
 
@@ -796,7 +798,13 @@ def create_app() -> Flask:
                 )
                 conn.commit()
             except sqlite3.OperationalError as e:
-                logger.warning("mark_error_recalled failed: %s", e)
+                msg = str(e).lower()
+                if "locked" in msg:
+                    logger.error("mark_error_recalled DB locked: %s", e)
+                    conn.close()
+                    return jsonify({"error": "db_locked", "message": str(e)}), 503
+                # "no such table" or "no such column" — best-effort, recall already succeeded
+                logger.debug("mark_error_recalled skipped: %s", e)
             finally:
                 conn.close()
 

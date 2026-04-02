@@ -71,14 +71,15 @@ class TestConfigDirCreation:
         assert load() == {"provider": "gemini"}
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions only")
+    @pytest.mark.skipif(getattr(os, "getuid", lambda: -1)() == 0, reason="Root has permissive umask")
     def test_config_dir_permissions_are_user_only(self, isolated_config):
-        """Config directory should be accessible only by owner after creation."""
+        """Config directory should not be world-accessible after creation."""
         save({"test": True})
         mode = os.stat(isolated_config.parent).st_mode & 0o777
-        # Parent dir should be at least owner-writable; we don't enforce 0o700
-        # but verify it's not world-readable
-        assert mode & 0o002 == 0, f"Config dir is world-writable: {oct(mode)}"
-        assert mode & 0o020 == 0, f"Config dir is group-writable: {oct(mode)}"
+        # Owner must have write permission
+        assert mode & 0o200 != 0, f"Config dir not owner-writable: {oct(mode)}"
+        # World/other bits must be off (group may vary with umask)
+        assert mode & 0o007 == 0, f"Config dir is world-accessible: {oct(mode)}"
 
 
 # ─── Read-only parent directory ──────────────────────────────────────────────
@@ -114,8 +115,8 @@ class TestDBDirCreation:
         assert db_file.exists()
         conn.close()
 
-    def test_db_path_from_env_override(self, tmp_path, monkeypatch):
-        """FORGEMEM_DB env var should override default path."""
+    def test_db_path_override(self, tmp_path, monkeypatch):
+        """Overriding DB_PATH should redirect init_db to the custom path."""
         db_file = tmp_path / "custom.db"
         monkeypatch.setattr(storage_module, "DB_PATH", db_file)
         storage_module.init_db()
@@ -129,28 +130,31 @@ class TestDaemonLogFallback:
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions only")
     @pytest.mark.skipif(getattr(os, "getuid", lambda: -1)() == 0, reason="Root bypasses permission checks")
     def test_log_fallback_to_tmp(self, tmp_path, monkeypatch):
-        """When primary log dir is unwritable, fallback to /tmp."""
-        import forgememo.daemon as daemon_module
+        """When primary log dir is unwritable and ALLOW_TMP_LOG=1, fall back to /tmp."""
+        import importlib
 
-        # Point log to an unwritable location
         readonly = tmp_path / "noperm"
         readonly.mkdir()
         log_path = str(readonly / "logs" / "daemon.log")
-        monkeypatch.setattr(daemon_module, "LOG_FILE", log_path)
+
+        monkeypatch.setenv("FORGEMEMO_DAEMON_LOG", log_path)
+        monkeypatch.setenv("FORGEMEMO_ALLOW_TMP_LOG", "1")
 
         os.chmod(readonly, stat.S_IRUSR | stat.S_IXUSR)
         try:
-            # The daemon module creates log dir at import time, so we test
-            # the fallback logic by checking the pattern
-            log_dir = os.path.dirname(log_path)
-            try:
-                os.makedirs(log_dir, exist_ok=True)
-                can_create = True
-            except PermissionError:
-                can_create = False
-            assert not can_create, "Should not be able to create log dir in readonly parent"
+            import forgememo.daemon as daemon_module
+            importlib.reload(daemon_module)
+            # After reload, LOG_FILE should have fallen back to /tmp/
+            assert daemon_module.LOG_FILE.startswith("/tmp/"), (
+                f"Expected /tmp/ fallback, got: {daemon_module.LOG_FILE}"
+            )
         finally:
             os.chmod(readonly, stat.S_IRWXU)
+            # Restore
+            monkeypatch.delenv("FORGEMEMO_DAEMON_LOG", raising=False)
+            monkeypatch.delenv("FORGEMEMO_ALLOW_TMP_LOG", raising=False)
+            import forgememo.daemon as daemon_module
+            importlib.reload(daemon_module)
 
 
 # ─── Concurrent config writes ───────────────────────────────────────────────

@@ -314,7 +314,17 @@ def _extract_error_text(payload: dict) -> str | None:
             parts.append(str(result["output"]))
         # Non-zero exit code (platform-dependent field names)
         exit_code = result.get("exitCode") or result.get("exit_code")
-        if exit_code and int(exit_code) != 0:
+        if exit_code:
+            try:
+                exit_code_int = int(exit_code)
+            except (ValueError, TypeError):
+                exit_code_int = None
+        else:
+            exit_code_int = None
+        if exit_code_int is not None and exit_code_int != 0:
+            parts.append(f"exit code {exit_code}")
+        elif exit_code and exit_code_int is None:
+            # Non-numeric exit code (e.g. "unknown") — still surface it
             parts.append(f"exit code {exit_code}")
         # Claude Code uses returnCodeInterpretation instead of exitCode
         rci = result.get("returnCodeInterpretation")
@@ -325,7 +335,9 @@ def _extract_error_text(payload: dict) -> str | None:
             parts.append("command interrupted")
             has_explicit_error = True
         # Non-zero exit code is also an explicit error signal
-        if exit_code and int(exit_code) != 0:
+        if exit_code_int is not None and exit_code_int != 0:
+            has_explicit_error = True
+        elif exit_code and exit_code_int is None:
             has_explicit_error = True
         result = "\n".join(parts)
         # If the dict had an explicit error/interrupted/exitCode field, return

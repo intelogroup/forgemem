@@ -717,6 +717,7 @@ def create_app() -> Flask:
                         "  error_text TEXT"
                         ");"
                         "CREATE INDEX IF NOT EXISTS idx_error_session_fp ON error_events(session_id, fingerprint);"
+                        "CREATE INDEX IF NOT EXISTS idx_error_project ON error_events(project_id);"
                     )
                     conn.execute(
                         "INSERT INTO error_events (session_id, project_id, fingerprint, error_keywords, error_text) "
@@ -730,8 +731,8 @@ def create_app() -> Flask:
                         ),
                     )
                     conn.commit()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to create error_events table inline: %s", e)
             finally:
                 conn.close()
 

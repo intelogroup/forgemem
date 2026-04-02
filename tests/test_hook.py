@@ -1812,7 +1812,7 @@ class TestErrorRecallDebounce:
         return base
 
     def test_recent_error_debounced(self, monkeypatch):
-        """Error seen 10 times but last occurrence 30s ago → debounced, no recall."""
+        """Error recalled 30s ago → debounced, no recall."""
         from datetime import datetime, timezone, timedelta
 
         recent_ts = (datetime.now(timezone.utc) - timedelta(seconds=30)).strftime(
@@ -1822,7 +1822,7 @@ class TestErrorRecallDebounce:
         monkeypatch.setattr(
             hook,
             "_daemon_get",
-            lambda path, params=None: {"count": 10, "last_ts": recent_ts},
+            lambda path, params=None: {"count": 10, "last_ts": recent_ts, "last_recalled_at": recent_ts},
         )
         monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
 
@@ -1830,7 +1830,7 @@ class TestErrorRecallDebounce:
         assert result is None  # debounced — no injection
 
     def test_old_error_not_debounced(self, monkeypatch, capsys):
-        """Error seen before but last occurrence 10 min ago → recall fires."""
+        """Error recalled 10 min ago → debounce expired, recall fires."""
         from datetime import datetime, timezone, timedelta
 
         old_ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime(
@@ -1839,7 +1839,7 @@ class TestErrorRecallDebounce:
 
         def fake_daemon_get(path, params=None):
             if path == "/error_events":
-                return {"count": 3, "last_ts": old_ts}
+                return {"count": 3, "last_ts": old_ts, "last_recalled_at": old_ts}
             if path == "/search":
                 return {"results": [{"id": "d:1", "type": "note", "title": "Fix"}]}
             if path.startswith("/observation/"):
@@ -1860,7 +1860,7 @@ class TestErrorRecallDebounce:
         monkeypatch.setattr(
             hook,
             "_daemon_get",
-            lambda path, params=None: {"count": 0, "last_ts": None},
+            lambda path, params=None: {"count": 0, "last_ts": None, "last_recalled_at": None},
         )
         posts = []
         monkeypatch.setattr(hook, "_daemon_post", lambda path, data: posts.append(data) or {})
@@ -1871,34 +1871,43 @@ class TestErrorRecallDebounce:
 
     def test_hot_reload_burst_only_fires_once(self, monkeypatch, capsys):
         """Simulates rapid-fire errors: only the first recall-eligible fires."""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timezone
 
         call_count = {"n": 0}
-        # First call: count=1, no last_ts → fires recall
-        # Second call: count=2, recent last_ts → debounced
+        recalled = {"at": None}
         recent_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         def fake_daemon_get(path, params=None):
             if path == "/error_events":
                 call_count["n"] += 1
-                if call_count["n"] == 1:
-                    return {"count": 1, "last_ts": None}  # old enough
-                return {"count": call_count["n"], "last_ts": recent_ts}
+                # First call: count=1, no recalled_at → fires recall
+                # Subsequent calls: count=N, recent recalled_at → debounced
+                return {
+                    "count": call_count["n"],
+                    "last_ts": recent_ts,
+                    "last_recalled_at": recalled["at"],
+                }
             if path == "/search":
                 return {"results": [{"id": "d:1", "type": "note", "title": "Tip"}]}
             if path.startswith("/observation/"):
                 return {"title": "Tip", "narrative": "Help"}
             return {}
 
-        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
-        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+        def fake_daemon_post(path, data):
+            # Track when recall is recorded
+            if path == "/error_events/recall":
+                recalled["at"] = recent_ts
+            return {}
 
-        # First call — should fire
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", fake_daemon_post)
+
+        # First call — should fire (count=1, no recalled_at)
         r1 = _handle_error_recall(self._error_payload(), "PostToolUse")
         assert r1 == 0
         capsys.readouterr()  # consume output
 
-        # Rapid subsequent calls — should be debounced
+        # Rapid subsequent calls — should be debounced (recalled_at is recent)
         for _ in range(5):
             r = _handle_error_recall(self._error_payload(), "PostToolUse")
             assert r is None  # debounced
@@ -1907,7 +1916,7 @@ class TestErrorRecallDebounce:
         """Two different errors in quick succession should both fire."""
         def fake_daemon_get(path, params=None):
             if path == "/error_events":
-                return {"count": 1, "last_ts": None}
+                return {"count": 1, "last_ts": None, "last_recalled_at": None}
             if path == "/search":
                 return {"results": [{"id": "d:1", "type": "note", "title": "Tip"}]}
             if path.startswith("/observation/"):

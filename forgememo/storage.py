@@ -126,7 +126,8 @@ CREATE TABLE IF NOT EXISTS error_events (
   project_id      TEXT,
   fingerprint     TEXT NOT NULL,
   error_keywords  TEXT,
-  error_text      TEXT
+  error_text      TEXT,
+  recalled_at     DATETIME
 );
 CREATE INDEX IF NOT EXISTS idx_error_session_fp ON error_events(session_id, fingerprint);
 CREATE INDEX IF NOT EXISTS idx_error_project ON error_events(project_id);

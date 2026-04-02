@@ -703,7 +703,12 @@ def create_app() -> Flask:
                     ),
                 )
                 conn.commit()
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if "no such table" not in msg:
+                    logger.warning("error_events INSERT failed: %s", e)
+                    conn.close()
+                    return jsonify({"error": "db_error", "message": str(e)}), 503
                 # Table may not exist yet on older DBs — create it inline
                 try:
                     conn.executescript(
@@ -714,7 +719,8 @@ def create_app() -> Flask:
                         "  project_id TEXT,"
                         "  fingerprint TEXT NOT NULL,"
                         "  error_keywords TEXT,"
-                        "  error_text TEXT"
+                        "  error_text TEXT,"
+                        "  recalled_at DATETIME"
                         ");"
                         "CREATE INDEX IF NOT EXISTS idx_error_session_fp ON error_events(session_id, fingerprint);"
                         "CREATE INDEX IF NOT EXISTS idx_error_project ON error_events(project_id);"
@@ -749,19 +755,52 @@ def create_app() -> Flask:
         try:
             try:
                 row = conn.execute(
-                    "SELECT COUNT(*) as cnt, MAX(ts) as last_ts "
+                    "SELECT COUNT(*) as cnt, MAX(ts) as last_ts, MAX(recalled_at) as last_recalled_at "
                     "FROM error_events WHERE session_id=? AND fingerprint=?",
                     (session_id, fingerprint),
                 ).fetchone()
                 count = row["cnt"] if row else 0
                 last_ts = row["last_ts"] if row else None
-            except sqlite3.OperationalError:
-                # Table doesn't exist yet
-                count = 0
-                last_ts = None
-            return jsonify({"count": count, "last_ts": last_ts})
+                last_recalled_at = row["last_recalled_at"] if row else None
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if "no such table" in msg or "no such column" in msg:
+                    count = 0
+                    last_ts = None
+                    last_recalled_at = None
+                else:
+                    conn.close()
+                    return jsonify({"error": "db_error", "message": str(e)}), 503
+            return jsonify({"count": count, "last_ts": last_ts, "last_recalled_at": last_recalled_at})
         finally:
             conn.close()
+
+    @app.route("/error_events/recall", methods=["POST"])
+    def mark_error_recalled():
+        """Record that a recall/injection happened for a session+fingerprint."""
+        data = request.get_json(silent=True) or {}
+        session_id = data.get("session_id")
+        fingerprint = data.get("fingerprint")
+        if not session_id or not fingerprint:
+            return jsonify({"error": "session_id and fingerprint required"}), 400
+
+        with _write_lock:
+            conn = get_conn()
+            try:
+                # Update the most recent row for this session+fingerprint
+                conn.execute(
+                    "UPDATE error_events SET recalled_at=CURRENT_TIMESTAMP "
+                    "WHERE id=(SELECT id FROM error_events "
+                    "WHERE session_id=? AND fingerprint=? ORDER BY ts DESC LIMIT 1)",
+                    (session_id, fingerprint),
+                )
+                conn.commit()
+            except sqlite3.OperationalError as e:
+                logger.warning("mark_error_recalled failed: %s", e)
+            finally:
+                conn.close()
+
+        return jsonify({"status": "ok"}), 200
 
     return app
 

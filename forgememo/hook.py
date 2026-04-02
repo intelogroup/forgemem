@@ -270,11 +270,15 @@ _FINGERPRINT_NOISE = re.compile(
     r"0x[0-9a-fA-F]+"            # hex addresses
     r"|line \d+"                   # line numbers
     r"|:\d+:\d+"                   # file:line:col
-    r"|/[\w./-]+"                  # file paths
+    r"|/[\w./-]+"                  # POSIX file paths
+    r"|[A-Za-z]:\\[\w.\\-]+"      # Windows file paths (C:\Users\...)
+    r"|\.{1,2}/[\w./-]+"          # relative paths (./foo, ../bar)
+    r"|<private>.*?</private>"    # private blocks
     r"|\b\d{10,}\b"               # timestamps
     r"|\b[0-9a-f]{8,}\b"          # hashes/ids
     r"|\bat \w+\s*\(.*?\)"        # stack frame locations
-    r")"
+    r")",
+    re.DOTALL,
 )
 
 
@@ -394,10 +398,8 @@ def _extract_error_keywords(error_text: str) -> str:
         key_lines = lines[:2]
 
     text = " ".join(key_lines)
-    # Remove file paths and noise but keep meaningful words
-    text = re.sub(r"/[\w./-]+", "", text)
-    text = re.sub(r"0x[0-9a-fA-F]+", "", text)
-    text = re.sub(r"\b\d{6,}\b", "", text)
+    # Reuse the same noise regex as fingerprinting for consistency
+    text = _FINGERPRINT_NOISE.sub("", text)
     # Keep only words 3+ chars
     words = [w for w in re.findall(r"[a-zA-Z_]\w{2,}", text)]
     # Deduplicate while preserving order
@@ -475,6 +477,8 @@ def _handle_error_recall(payload: dict, event_name: str) -> int | None:
     error_text = _extract_error_text(payload)
     if not error_text:
         return None
+    # Strip private blocks before fingerprinting/keyword extraction
+    error_text = strip_private(error_text) if isinstance(error_text, str) else error_text
 
     fingerprint = _error_fingerprint(error_text)
     session_id = payload.get("session_id") or payload.get("session") or "unknown"
@@ -506,11 +510,11 @@ def _handle_error_recall(payload: dict, event_name: str) -> int | None:
         # First occurrence — no recall needed
         return None
 
-    # Debounce: skip if we already injected context for this error recently.
-    # This prevents hot-reload loops from flooding searches and exhausting
-    # the agent's context window.
-    last_ts = check.get("last_ts")
-    if _is_within_debounce(last_ts):
+    # Debounce: skip if we already *injected* context for this error recently.
+    # Uses last_recalled_at (not last_ts) so recording new occurrences doesn't
+    # suppress the first recall or keep extending the debounce window.
+    last_recalled = check.get("last_recalled_at")
+    if _is_within_debounce(last_recalled):
         return None
 
     # Repeated error! Search memories for relevant lessons
@@ -561,6 +565,16 @@ def _handle_error_recall(payload: dict, event_name: str) -> int | None:
 
     context = "\n".join(context_lines)
     print(_format_context_json(context, event_name))
+
+    # Record the recall timestamp so debounce works against injection time,
+    # not error occurrence time.
+    _daemon_post(
+        "/error_events/recall",
+        {
+            "session_id": session_id,
+            "fingerprint": fingerprint,
+        },
+    )
     return 0
 
 

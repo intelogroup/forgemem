@@ -904,3 +904,45 @@ class TestErrorEvents:
         ).fetchone()
         conn.close()
         assert "SECRET_KEY" not in row["error_text"]
+
+    def test_get_returns_last_recalled_at(self, client):
+        """GET should return last_recalled_at field."""
+        r = client.get("/error_events?session_id=sess-new&fingerprint=xyz")
+        data = r.get_json()
+        assert "last_recalled_at" in data
+        assert data["last_recalled_at"] is None
+
+    def test_recall_endpoint_marks_recalled(self, client):
+        """POST /error_events/recall updates recalled_at on the latest row."""
+        client.post("/error_events", json={
+            "session_id": "sess-recall",
+            "fingerprint": "fp-recall",
+        })
+        r = client.post("/error_events/recall", json={
+            "session_id": "sess-recall",
+            "fingerprint": "fp-recall",
+        })
+        assert r.status_code == 200
+
+        r = client.get("/error_events?session_id=sess-recall&fingerprint=fp-recall")
+        data = r.get_json()
+        assert data["last_recalled_at"] is not None
+
+    def test_recall_endpoint_missing_params_returns_400(self, client):
+        r = client.post("/error_events/recall", json={"session_id": "s1"})
+        assert r.status_code == 400
+        r = client.post("/error_events/recall", json={"fingerprint": "fp"})
+        assert r.status_code == 400
+
+    def test_recall_does_not_affect_count(self, client):
+        """Marking recalled should not change the error count."""
+        client.post("/error_events", json={
+            "session_id": "sess-rc",
+            "fingerprint": "fp-rc",
+        })
+        client.post("/error_events/recall", json={
+            "session_id": "sess-rc",
+            "fingerprint": "fp-rc",
+        })
+        r = client.get("/error_events?session_id=sess-rc&fingerprint=fp-rc")
+        assert r.get_json()["count"] == 1  # recall doesn't add a row

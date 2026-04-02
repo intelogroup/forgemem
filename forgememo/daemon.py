@@ -80,17 +80,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-_migration_handler = logging.StreamHandler(sys.stderr)
-_migration_handler.setLevel(logging.INFO)
-_migration_handler.setFormatter(
-    logging.Formatter("[%(asctime)s] MIGRATION: %(message)s")
-)
-migration_logger = logging.getLogger("forgememo.migration")
-migration_logger.addHandler(_migration_handler)
-migration_logger.setLevel(logging.INFO)
-migration_logger.propagate = False
-
 _write_lock = threading.Lock()
+
+_ERROR_EVENTS_CIRCUIT_BREAKER_FAIL_LIMIT = 3
+_error_events_consecutive_failures = 0
+_error_events_disabled = False
+
+
+def _error_events_circuit_open() -> bool:
+    """Check if error_events circuit breaker is open (DISABLED)."""
+    return _error_events_disabled
+
+
+def _error_events_record_failure() -> None:
+    """Record a failure and trip circuit breaker if limit exceeded."""
+    global _error_events_consecutive_failures, _error_events_disabled
+    _error_events_consecutive_failures += 1
+    if _error_events_consecutive_failures >= _ERROR_EVENTS_CIRCUIT_BREAKER_FAIL_LIMIT:
+        _error_events_disabled = True
+        logger.error(
+            "error_events circuit breaker OPEN: module DISABLED after %d consecutive failures",
+            _error_events_consecutive_failures,
+        )
+
+
+def _error_events_record_success() -> None:
+    """Record success and reset circuit breaker."""
+    global _error_events_consecutive_failures, _error_events_disabled
+    _error_events_consecutive_failures = 0
+    if _error_events_disabled:
+        _error_events_disabled = False
+        logger.info("error_events circuit breaker CLOSED: module re-enabled")
+
 
 _PRIVATE_RE = None
 
@@ -427,8 +448,8 @@ def create_app() -> Flask:
                                 "project_id": r["project_tag"],
                             }
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Compat principles query failed (may be empty): %s", e)
             except sqlite3.OperationalError as e:
                 return jsonify({"error": "invalid_query", "message": str(e)}), 400
 
@@ -799,6 +820,14 @@ def create_app() -> Flask:
 
     @app.route("/error_events", methods=["POST"])
     def post_error_event():
+        if _error_events_circuit_open():
+            return jsonify(
+                {
+                    "error": "module_disabled",
+                    "message": "error_events module temporarily disabled",
+                }
+            ), 503
+
         data = request.get_json(silent=True) or {}
         session_id = data.get("session_id")
         fingerprint = data.get("fingerprint")
@@ -825,9 +854,11 @@ def create_app() -> Flask:
                     ),
                 )
                 conn.commit()
+                _error_events_record_success()
             except sqlite3.OperationalError as e:
                 msg = str(e).lower()
                 if "no such table" not in msg:
+                    _error_events_record_failure()
                     logger.warning("error_events INSERT failed: %s", e)
                     conn.close()
                     return jsonify({"error": "db_error", "message": str(e)}), 503
@@ -858,7 +889,9 @@ def create_app() -> Flask:
                         ),
                     )
                     conn.commit()
+                    _error_events_record_success()
                 except Exception as e:
+                    _error_events_record_failure()
                     logger.warning(
                         "Failed to create error_events table inline: %s",
                         e,

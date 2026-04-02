@@ -98,11 +98,23 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 2
           $env:FORGEMEMO_HTTP_PORT = "5555"
-          Start-Process -NoNewWindow python -ArgumentList "-m","forgememo.daemon"
-          Start-Sleep -Seconds 5
+          # Start daemon as background job with output capture
+          $job = Start-Job -ScriptBlock {
+            param($port)
+            python -m forgememo.daemon
+          } -ArgumentList "5555"
+          # Wait for daemon to start
+          Start-Sleep -Seconds 8
+          # Verify daemon is running
+          $daemon = Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*forgememo*" }
+          if (-not $daemon) {
+            Write-Host "Daemon process not found"
+            exit 1
+          }
+          Write-Host "Daemon process running with PID $($daemon.Id)"
           python -c "
           from forgememo.daemon import wait_for_port
           assert wait_for_port('127.0.0.1', 5555, timeout=30), 'Daemon failed to start'

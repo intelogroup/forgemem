@@ -678,6 +678,87 @@ def create_app() -> Flask:
         finally:
             conn.close()
 
+    @app.route("/error_events", methods=["POST"])
+    def post_error_event():
+        data = request.get_json(silent=True) or {}
+        session_id = data.get("session_id")
+        fingerprint = data.get("fingerprint")
+        if not session_id or not fingerprint:
+            return jsonify({"error": "session_id and fingerprint required"}), 400
+
+        error_text = strip_private(data.get("error_text") or "")
+
+        with _write_lock:
+            conn = get_conn()
+            try:
+                conn.execute(
+                    "INSERT INTO error_events (session_id, project_id, fingerprint, error_keywords, error_text) "
+                    "VALUES (?,?,?,?,?)",
+                    (
+                        session_id,
+                        data.get("project_id"),
+                        fingerprint,
+                        data.get("error_keywords"),
+                        error_text[:1000] if error_text else None,
+                    ),
+                )
+                conn.commit()
+            except sqlite3.OperationalError:
+                # Table may not exist yet on older DBs — create it inline
+                try:
+                    conn.executescript(
+                        "CREATE TABLE IF NOT EXISTS error_events ("
+                        "  id INTEGER PRIMARY KEY,"
+                        "  ts DATETIME DEFAULT CURRENT_TIMESTAMP,"
+                        "  session_id TEXT NOT NULL,"
+                        "  project_id TEXT,"
+                        "  fingerprint TEXT NOT NULL,"
+                        "  error_keywords TEXT,"
+                        "  error_text TEXT"
+                        ");"
+                        "CREATE INDEX IF NOT EXISTS idx_error_session_fp ON error_events(session_id, fingerprint);"
+                    )
+                    conn.execute(
+                        "INSERT INTO error_events (session_id, project_id, fingerprint, error_keywords, error_text) "
+                        "VALUES (?,?,?,?,?)",
+                        (
+                            session_id,
+                            data.get("project_id"),
+                            fingerprint,
+                            data.get("error_keywords"),
+                            error_text[:1000] if error_text else None,
+                        ),
+                    )
+                    conn.commit()
+                except Exception:
+                    pass
+            finally:
+                conn.close()
+
+        return jsonify({"status": "ok"}), 201
+
+    @app.route("/error_events", methods=["GET"])
+    def get_error_events():
+        session_id = request.args.get("session_id")
+        fingerprint = request.args.get("fingerprint")
+        if not session_id or not fingerprint:
+            return jsonify({"error": "session_id and fingerprint required"}), 400
+
+        conn = get_conn()
+        try:
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM error_events WHERE session_id=? AND fingerprint=?",
+                    (session_id, fingerprint),
+                ).fetchone()
+                count = row["cnt"] if row else 0
+            except sqlite3.OperationalError:
+                # Table doesn't exist yet
+                count = 0
+            return jsonify({"count": count})
+        finally:
+            conn.close()
+
     return app
 
 

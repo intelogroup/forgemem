@@ -11,6 +11,7 @@ Covers:
 - _daemon_get: HTTP, socket, error paths
 - _handle_session_recall: memories, daemon-down, narrative truncation
 - _handle_session_end: POSIX / Windows, missing binary, missing cwd
+- _handle_error_recall: error detection, fingerprinting, mid-session recall
 - main(): error exits, cross-agent event dispatch
 """
 
@@ -34,6 +35,10 @@ from forgememo.hook import (
     _handle_post_tool_use,
     _handle_session_recall,
     _handle_session_end,
+    _handle_error_recall,
+    _extract_error_text,
+    _error_fingerprint,
+    _extract_error_keywords,
     _read_stdin_json,
     _post_event,
     _daemon_get,
@@ -782,3 +787,326 @@ class TestCrossAgentDispatch:
         assert rc == 0
         assert len(posted) == 1
         assert posted[0]["event_type"] == "SomeCustomEvent"
+
+
+# ---------------------------------------------------------------------------
+# _extract_error_text
+# ---------------------------------------------------------------------------
+
+
+class TestExtractErrorText:
+    def test_detects_traceback(self):
+        payload = {"tool_result": "Traceback (most recent call last):\n  File ...\nTypeError: bad"}
+        assert _extract_error_text(payload) is not None
+        assert "Traceback" in _extract_error_text(payload)
+
+    def test_detects_error_prefix(self):
+        payload = {"tool_result": "Error: module not found"}
+        assert _extract_error_text(payload) is not None
+
+    def test_detects_npm_error(self):
+        payload = {"tool_result": "npm ERR! code ENOENT"}
+        assert _extract_error_text(payload) is not None
+
+    def test_detects_exit_code(self):
+        payload = {"tool_result": {"stdout": "", "stderr": "failed", "exitCode": 1}}
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "exit code" in result
+
+    def test_no_error_returns_none(self):
+        payload = {"tool_result": "Successfully wrote file.py"}
+        assert _extract_error_text(payload) is None
+
+    def test_empty_result_returns_none(self):
+        assert _extract_error_text({}) is None
+        assert _extract_error_text({"tool_result": ""}) is None
+
+    def test_dict_result_with_stderr(self):
+        payload = {"tool_result": {"stderr": "ModuleNotFoundError: No module named 'foo'"}}
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "ModuleNotFoundError" in result
+
+    def test_toolResult_key_also_works(self):
+        payload = {"toolResult": "Error: something went wrong"}
+        assert _extract_error_text(payload) is not None
+
+    def test_detects_build_failed(self):
+        payload = {"tool_result": "Build failed with 3 errors"}
+        assert _extract_error_text(payload) is not None
+
+    def test_detects_command_not_found(self):
+        payload = {"tool_result": "bash: foobar: command not found"}
+        assert _extract_error_text(payload) is not None
+
+    def test_successful_bash_exit_zero_no_error(self):
+        payload = {"tool_result": {"stdout": "all good", "stderr": "", "exitCode": 0}}
+        assert _extract_error_text(payload) is None
+
+
+# ---------------------------------------------------------------------------
+# _error_fingerprint
+# ---------------------------------------------------------------------------
+
+
+class TestErrorFingerprint:
+    def test_same_error_same_fingerprint(self):
+        err1 = "TypeError: cannot read property 'foo' of undefined"
+        err2 = "TypeError: cannot read property 'foo' of undefined"
+        assert _error_fingerprint(err1) == _error_fingerprint(err2)
+
+    def test_different_line_numbers_same_fingerprint(self):
+        err1 = "Error at line 42: TypeError: bad type"
+        err2 = "Error at line 99: TypeError: bad type"
+        assert _error_fingerprint(err1) == _error_fingerprint(err2)
+
+    def test_different_paths_same_fingerprint(self):
+        err1 = "FileNotFoundError: /home/user/project/src/foo.py not found"
+        err2 = "FileNotFoundError: /tmp/other/bar.py not found"
+        assert _error_fingerprint(err1) == _error_fingerprint(err2)
+
+    def test_different_errors_different_fingerprint(self):
+        err1 = "TypeError: cannot read property"
+        err2 = "ModuleNotFoundError: no module named requests"
+        assert _error_fingerprint(err1) != _error_fingerprint(err2)
+
+    def test_returns_16_char_hex(self):
+        fp = _error_fingerprint("Error: something")
+        assert len(fp) == 16
+        assert all(c in "0123456789abcdef" for c in fp)
+
+
+# ---------------------------------------------------------------------------
+# _extract_error_keywords
+# ---------------------------------------------------------------------------
+
+
+class TestExtractErrorKeywords:
+    def test_extracts_meaningful_words(self):
+        error = "ModuleNotFoundError: No module named 'requests'"
+        kw = _extract_error_keywords(error)
+        assert "ModuleNotFoundError" in kw
+        assert "module" in kw
+        assert "requests" in kw
+
+    def test_strips_file_paths(self):
+        error = "Error in /home/user/project/src/main.py: ImportError"
+        kw = _extract_error_keywords(error)
+        assert "/home" not in kw
+        assert "ImportError" in kw
+
+    def test_limits_keywords(self):
+        error = "word " * 50
+        kw = _extract_error_keywords(error)
+        assert len(kw.split()) <= 12
+
+    def test_deduplicates_keywords(self):
+        error = "Error: Error: Error: something"
+        kw = _extract_error_keywords(error)
+        assert kw.lower().count("error") == 1
+
+
+# ---------------------------------------------------------------------------
+# _handle_error_recall
+# ---------------------------------------------------------------------------
+
+
+class TestHandleErrorRecall:
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        monkeypatch.delenv("FORGEMEMO_PROJECT_ID", raising=False)
+        monkeypatch.setattr(hook, "SOURCE_TOOL", "claude-code")
+
+    def _error_payload(self, error_text="TypeError: bad type", **overrides):
+        base = {
+            "tool_name": "Bash",
+            "session_id": "sess-1",
+            "project_id": "/tmp/proj",
+            "tool_result": error_text,
+        }
+        base.update(overrides)
+        return base
+
+    def test_no_error_returns_none(self, monkeypatch):
+        result = _handle_error_recall(
+            {"tool_name": "Bash", "tool_result": "Success!", "session_id": "s1"},
+            "PostToolUse",
+        )
+        assert result is None
+
+    def test_first_error_returns_none(self, monkeypatch):
+        """First occurrence should record but not recall."""
+        daemon_posts = []
+        monkeypatch.setattr(
+            hook,
+            "_daemon_get",
+            lambda path, params=None: {"count": 0},
+        )
+        monkeypatch.setattr(
+            hook,
+            "_daemon_post",
+            lambda path, data: daemon_posts.append((path, data)) or {},
+        )
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert result is None
+        # Should have posted the error event
+        assert len(daemon_posts) == 1
+        assert daemon_posts[0][0] == "/error_events"
+
+    def test_repeated_error_injects_context(self, monkeypatch, capsys):
+        """Second occurrence should search memories and inject context."""
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 1}  # seen once before
+            if path == "/search":
+                return {
+                    "results": [
+                        {"id": "d:42", "type": "bugfix", "title": "Fix TypeError in parser"},
+                    ]
+                }
+            if path.startswith("/observation/"):
+                return {
+                    "title": "Fix TypeError in parser",
+                    "narrative": "The TypeError was caused by missing null check. Add guard clause.",
+                }
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert result == 0
+
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        ctx = data["hookSpecificOutput"]["additionalContext"]
+        assert "seen 2 times" in ctx
+        assert "TypeError" in ctx or "parser" in ctx
+
+    def test_repeated_error_with_no_memories_returns_none(self, monkeypatch):
+        """Repeated error but no matching memories — no injection."""
+        monkeypatch.setattr(
+            hook,
+            "_daemon_get",
+            lambda path, params=None: {"count": 1} if path == "/error_events" else {"results": []},
+        )
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert result is None
+
+    def test_post_tool_use_integrates_error_recall(self, monkeypatch, capsys):
+        """PostToolUse handler should call error recall and still post write events."""
+        posted_events = []
+
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 2}  # seen twice before
+            if path == "/search":
+                return {
+                    "results": [
+                        {"id": "d:10", "type": "discovery", "title": "Connection pooling fix"},
+                    ]
+                }
+            if path.startswith("/observation/"):
+                return {"title": "Connection pooling fix", "narrative": "Use keep-alive"}
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+        monkeypatch.setattr(hook, "_post_event", lambda e: posted_events.append(e))
+
+        payload = self._error_payload(tool_name="Bash")
+        rc = _handle_post_tool_use(payload, "PostToolUse")
+        assert rc == 0
+
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        ctx = data["hookSpecificOutput"]["additionalContext"]
+        assert "seen 3 times" in ctx
+
+        # Bash is a write tool — should also be posted
+        assert len(posted_events) == 1
+
+    def test_read_tool_error_still_triggers_recall(self, monkeypatch, capsys):
+        """Errors from read-only tools should still trigger error recall."""
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 1}
+            if path == "/search":
+                return {
+                    "results": [
+                        {"id": "d:5", "type": "note", "title": "File encoding fix"},
+                    ]
+                }
+            if path.startswith("/observation/"):
+                return {"title": "File encoding fix", "narrative": "Use utf-8"}
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+        posted = []
+        monkeypatch.setattr(hook, "_post_event", lambda e: posted.append(e))
+
+        payload = {
+            "tool_name": "Read",
+            "session_id": "s1",
+            "project_id": "/proj",
+            "tool_result": "Error: FileNotFoundError: No such file or directory",
+        }
+        rc = _handle_post_tool_use(payload, "PostToolUse")
+        assert rc == 0
+        # Read is not a write tool, so no event posted
+        assert len(posted) == 0
+
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert "File encoding fix" in data["hookSpecificOutput"]["additionalContext"]
+
+    def test_cross_project_search_included(self, monkeypatch, capsys):
+        """Should search both project-specific and cross-project memories."""
+        search_calls = []
+
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 1}
+            if path == "/search":
+                search_calls.append(params)
+                if params and params.get("project_id"):
+                    return {"results": []}  # no project-specific results
+                return {
+                    "results": [
+                        {"id": "d:99", "type": "bugfix", "title": "Global fix"},
+                    ]
+                }
+            if path.startswith("/observation/"):
+                return {"title": "Global fix", "narrative": "Works everywhere"}
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert result == 0
+        # Should have searched twice: project-specific + global
+        assert len(search_calls) == 2
+
+    def test_error_count_increments_in_context(self, monkeypatch, capsys):
+        """Context should say 'seen N+1 times' where N is prior count."""
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 4}
+            if path == "/search":
+                return {"results": [{"id": "d:1", "type": "note", "title": "Tip"}]}
+            if path.startswith("/observation/"):
+                return {"title": "Tip", "narrative": "Do this"}
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        _handle_error_recall(self._error_payload(), "PostToolUse")
+        out = capsys.readouterr().out
+        ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+        assert "5 times" in ctx

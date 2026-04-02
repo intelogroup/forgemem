@@ -105,6 +105,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_migration_handler = logging.StreamHandler(sys.stderr)
+_migration_handler.setLevel(logging.INFO)
+_migration_handler.setFormatter(
+    logging.Formatter("[%(asctime)s] MIGRATION: %(message)s")
+)
+migration_logger = logging.getLogger("forgememo.migration")
+migration_logger.addHandler(_migration_handler)
+migration_logger.setLevel(logging.INFO)
+migration_logger.propagate = False
+
 _write_lock = threading.Lock()
 
 _ERROR_EVENTS_CIRCUIT_BREAKER_FAIL_LIMIT = 3

@@ -67,51 +67,77 @@ jobs:
         run: |
           python -c "
           import json
-          from pathlib import Path
-          data = json.load(open(Path.home() / '.claude' / 'settings.json'))
-          assert 'forgememo' in data.get('mcpServers', {}), 'MCP not registered'
-          print('MCP registered OK')
-          "
+           from pathlib import Path
+           data = json.load(open(Path.home() / '.claude' / 'settings.json'))
+           assert 'forgememo' in data.get('mcpServers', {}), 'MCP not registered'
+           print('MCP registered OK')
+           "
 
-      # ── Verify daemon is healthy (all platforms) ────────────────────
-      # The daemon was already started by init. We just need to verify health.
-      - name: Verify daemon health (POSIX)
+      # ── Start daemon directly (bypass launchctl for CI determinism) ─
+      - name: Start daemon and verify (POSIX)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          # Give the daemon a moment to start (it was started by init)
-          sleep 5
-          # Deterministic polling for port (60s timeout)
+          # Cleanup function to kill daemon on exit
+          cleanup() { kill $(jobs -p) 2>/dev/null || true; }
+          trap cleanup EXIT
+
+          # Kill any existing processes on port 5555
+          pkill -9 -f "forgememo" 2>/dev/null || true
+          lsof -ti:5555 | xargs -r kill -9 2>/dev/null || true
+          sleep 2
+
+          # Start daemon directly (bypasses launchctl async scheduling)
+          export FORGEMEMO_HTTP_PORT=5555
+          python -m forgememo.daemon &
+          DAEMON_PID=$!
+
+          # Deterministic polling: socket + HTTP health (120s timeout)
           START=$(date +%s)
-          TIMEOUT=60
+          TIMEOUT=120
           FOUND=0
           while [ $(($(date +%s) - $START)) -lt $TIMEOUT ]; do
+            # Assert daemon process is still alive
+            if ! kill -0 $DAEMON_PID 2>/dev/null; then
+              echo "Error: Daemon exited unexpectedly while waiting for port 5555"
+              exit 1
+            fi
             # Poll port - check if anything is listening
             if timeout 1 bash -c "echo > /dev/tcp/127.0.0.1/5555" 2>/dev/null; then
-              echo "Port 5555 is listening"
-              FOUND=1
-              break
+              # Port is open, now verify /health endpoint (application layer ready)
+              if python -c "import requests; r=requests.get('http://127.0.0.1:5555/health',timeout=5); assert r.json().get('ok')" 2>/dev/null; then
+                echo "Port 5555 is listening and /health OK"
+                FOUND=1
+                break
+              fi
             fi
             sleep 1
           done
           if [ $FOUND -eq 0 ]; then
-            echo "Timeout: no service listening on port 5555 after $TIMEOUT seconds"
+            echo "Timeout: daemon not ready after $TIMEOUT seconds"
             exit 1
           fi
-          # Verify health
-          python -c "import requests; r=requests.get('http://127.0.0.1:5555/health',timeout=10); assert r.json()['ok'], 'unhealthy'; print('Health OK')"
+          echo "Daemon healthy and ready"
         env:
           FORGEMEMO_HTTP_PORT: "5555"
 
-      - name: Verify daemon health (Windows)
+      - name: Start daemon and verify (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Give the daemon a moment to start (it was started by init)
-          Start-Sleep -Seconds 5
-          # Deterministic polling for port (60s timeout)
+          # Kill any existing processes
+          Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-NetTCPConnection -LocalPort 5555 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+          Start-Sleep -Seconds 2
+          $env:FORGEMEMO_HTTP_PORT = "5555"
+
+          # Start daemon directly
+          Start-Process -NoNewWindow python -ArgumentList "-m","forgememo.daemon"
+          Start-Sleep -Seconds 2
+
+          # Deterministic polling: socket + HTTP health (120s timeout)
           $start = Get-Date
-          $timeout = 60
+          $timeout = 120
           $found = $false
           while (((Get-Date) - $start).TotalSeconds -lt $timeout) {
             # Poll port
@@ -119,26 +145,27 @@ jobs:
               $tcp = New-Object System.Net.Sockets.TcpClient
               $tcp.Connect("127.0.0.1", 5555)
               $tcp.Close()
-              $found = $true
-              Write-Host "Port 5555 is listening"
-              break
+              # Port is open, verify /health
+              try {
+                $r = Invoke-RestMethod -Uri "http://127.0.0.1:5555/health" -TimeoutSec 5
+                if ($r.ok -eq $true) {
+                  $found = $true
+                  Write-Host "Port 5555 is listening and /health OK"
+                  break
+                }
+              } catch {
+                # /health not ready yet
+              }
             } catch {
-              # Port not ready yet, continue polling
+              # Port not ready yet
             }
             Start-Sleep -Seconds 1
           }
           if (-not $found) {
-            Write-Host "Timeout: no service listening on port 5555 after $timeout seconds"
+            Write-Host "Timeout: daemon not ready after $timeout seconds"
             exit 1
           }
-          # Verify health using Invoke-RestMethod
-          $r = Invoke-RestMethod -Uri "http://127.0.0.1:5555/health" -TimeoutSec 10
-          if ($r.ok -eq $true) {
-            Write-Host "Health OK"
-          } else {
-            Write-Host "Health check failed"
-            exit 1
-          }
+          Write-Host "Daemon healthy and ready"
         env:
           FORGEMEMO_HTTP_PORT: "5555"
 

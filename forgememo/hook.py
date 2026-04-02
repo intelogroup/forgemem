@@ -269,7 +269,7 @@ _FINGERPRINT_NOISE = re.compile(
     r"(?:"
     r"0x[0-9a-fA-F]+"            # hex addresses
     r"|line \d+"                   # line numbers
-    r"|:\d+:\d+"                   # file:line:col
+    r"|:\d+(?::\d+)?"               # file:line or file:line:col
     r"|/[\w./-]+"                  # POSIX file paths
     r"|[A-Za-z]:\\[\w.\\-]+"      # Windows file paths (C:\Users\...)
     r"|\.{1,2}/[\w./-]+"          # relative paths (./foo, ../bar)

@@ -102,8 +102,18 @@ jobs:
               echo "Error: Daemon exited unexpectedly while waiting for port 5555"
               exit 1
             fi
-            # Poll port - check if anything is listening
-            if timeout 1 bash -c "echo > /dev/tcp/127.0.0.1/5555" 2>/dev/null; then
+            # Poll port using Python socket (more reliable than /dev/tcp on macOS)
+            if python -c "
+              import socket
+              try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(1)
+                s.connect(('127.0.0.1', 5555))
+                s.close()
+                print('port_open')
+              except:
+                pass
+            " 2>/dev/null | grep -q "port_open"; then
               # Port is open, now verify /health endpoint (application layer ready)
               if python -c "import requests; r=requests.get('http://127.0.0.1:5555/health',timeout=5); assert r.json().get('ok')" 2>/dev/null; then
                 echo "Port 5555 is listening and /health OK"

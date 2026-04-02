@@ -73,14 +73,46 @@ jobs:
           print('MCP registered OK')
           "
 
-      # ── Daemon health check ───────────────────────────────────
-      # The daemon should already be running from init (via LaunchAgent on macOS)
-      # We just need to verify it's accessible on the expected port
-      - name: Verify daemon health
+      # ── Start daemon explicitly with HTTP port ───────────────────
+      - name: Start daemon (background, POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
-          # Give the daemon from init a moment to start if needed
-          sleep 3
-          python -c "import requests; r=requests.get('http://127.0.0.1:5555/health',timeout=10); assert r.json()['ok'], 'unhealthy'; print('Health OK')"
+          # Kill any existing daemon processes
+          pkill -f "forgememo.daemon" 2>/dev/null || true
+          pkill -f "forgememo daemon" 2>/dev/null || true
+          sleep 2
+          # Start daemon explicitly with HTTP port
+          export FORGEMEMO_HTTP_PORT=5555
+          nohup python -m forgememo.daemon > /tmp/daemon.log 2>&1 &
+          sleep 4
+          python -c "
+          from forgememo.daemon import wait_for_port
+          assert wait_for_port('127.0.0.1', 5555, timeout=30), 'Daemon failed to start'
+          print('Daemon healthy')
+          "
+        env:
+          FORGEMEMO_HTTP_PORT: "5555"
+
+      - name: Start daemon (background, Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          $env:FORGEMEMO_HTTP_PORT = "5555"
+          Start-Process -NoNewWindow python -ArgumentList "-m","forgememo.daemon"
+          Start-Sleep -Seconds 5
+          python -c "
+          from forgememo.daemon import wait_for_port
+          assert wait_for_port('127.0.0.1', 5555, timeout=30), 'Daemon failed to start'
+          print('Daemon healthy')
+          "
+        env:
+          FORGEMEMO_HTTP_PORT: "5555"
+
+      - name: Verify daemon health
+        run: python -c "import requests; r=requests.get('http://127.0.0.1:5555/health',timeout=10); assert r.json()['ok'], 'unhealthy'; print('Health OK')"
         env:
           FORGEMEMO_HTTP_PORT: "5555"
 

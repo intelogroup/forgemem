@@ -86,7 +86,7 @@ def _prompt_provider_setup(yes: bool, force: bool = False) -> None:
         _configure_provider_noninteractive(auto)
         if claude_detected:
             console.print(
-                f"[green]Provider auto-set to claude_code[/] (Claude CLI detected — no key needed)."
+                "[green]Provider auto-set to claude_code[/] (Claude CLI detected — no key needed)."
             )
         else:
             console.print(

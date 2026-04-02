@@ -80,13 +80,11 @@ jobs:
         run: |
           export FORGEMEMO_HTTP_PORT=5555
           python -m forgememo.daemon &
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            if python -c "import requests; r=requests.get('http://127.0.0.1:5555/health',timeout=2); exit(0 if r.ok else 1)" 2>/dev/null; then
-              echo "Daemon healthy after ${i}s"
-              break
-            fi
-            sleep 1
-          done
+          python -c "
+          from forgememo.daemon import wait_for_port
+          assert wait_for_port('127.0.0.1', 5555, timeout=30), 'Daemon failed to start'
+          print('Daemon healthy')
+          "
         env:
           FORGEMEMO_HTTP_PORT: "5555"
 
@@ -96,15 +94,11 @@ jobs:
         run: |
           $env:FORGEMEMO_HTTP_PORT = "5555"
           Start-Process -NoNewWindow python -ArgumentList "-m","forgememo.daemon"
-          for ($i = 1; $i -le 10; $i++) {
-            try {
-              $r = Invoke-RestMethod -Uri "http://127.0.0.1:5555/health" -TimeoutSec 2
-              Write-Host "Daemon healthy after ${i}s"
-              break
-            } catch {
-              Start-Sleep -Seconds 1
-            }
-          }
+          python -c "
+          from forgememo.daemon import wait_for_port
+          assert wait_for_port('127.0.0.1', 5555, timeout=30), 'Daemon failed to start'
+          print('Daemon healthy')
+          "
         env:
           FORGEMEMO_HTTP_PORT: "5555"
 

@@ -33,6 +33,8 @@ _PRIVATE_RE = None
 
 def _ensure_daemon() -> bool:
     """Check daemon health; auto-restart if unreachable. Returns True if alive."""
+    from forgememo.daemon import wait_for_port
+
     port = HTTP_PORT or "5555"
     url = f"http://127.0.0.1:{port}/health"
     try:
@@ -41,19 +43,14 @@ def _ensure_daemon() -> bool:
     except Exception:
         pass
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [sys.executable, "-m", "forgememo.daemon"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        for _ in range(5):
-            time.sleep(1)
-            try:
-                requests.get(url, timeout=1).raise_for_status()
-                return True
-            except Exception:
-                pass
+        if wait_for_port("127.0.0.1", int(port), timeout=10, proc=proc):
+            return True
     except Exception:
         pass
     return False
@@ -202,6 +199,64 @@ def _daemon_post(path: str, data: dict) -> dict:
         return {}
 
 
+_EXIT_CODE_SIGNALS = frozenset(
+    {"SIGINT", "SIGTERM", "SIGKILL", "SIGQUIT", "SIGABRT", "SIGHUP"}
+)
+
+_EXIT_CODE_NUMERIC = re.compile(r"^-?\d+$")
+
+
+def _is_signal(exit_code: str) -> bool:
+    """Check if exit_code is a signal name like SIGINT, SIGTERM."""
+    return exit_code.upper() in _EXIT_CODE_SIGNALS
+
+
+def _is_cancelled_signal(exit_code: str) -> bool:
+    """Check if exit_code indicates user cancellation."""
+    lower = str(exit_code).lower()
+    return lower in {
+        "sigint",
+        "sigterm",
+        "cancelled",
+        "canceled",
+        "keyboard interrupt",
+        "keyboardinterrupt",
+        "user cancelled",
+        "user canceled",
+    }
+
+
+def _parse_exit_code(exit_code: Any) -> tuple[int | None, bool, bool]:
+    """Parse exit code and return (numeric_value, is_error, is_cancelled).
+
+    Returns:
+        - numeric_value: int if parseable, None otherwise
+        - is_error: True if non-zero or signal
+        - is_cancelled: True if user-initiated cancellation
+    """
+    if exit_code is None:
+        return None, False, False
+
+    code_str = str(exit_code).strip()
+
+    if _is_signal(code_str):
+        return None, True, code_str.upper() == "SIGINT"
+
+    if _is_cancelled_signal(code_str):
+        return None, True, True
+
+    if _EXIT_CODE_NUMERIC.match(code_str):
+        try:
+            val = int(code_str)
+            if code_str.startswith(("0x", "0X")):
+                val = int(code_str, 16)
+            return val, val != 0, False
+        except ValueError:
+            pass
+
+    return None, True, False
+
+
 _ERROR_PATTERNS = re.compile(
     r"(?:"
     r"Traceback \(most recent call last\)"
@@ -267,6 +322,7 @@ def _extract_error_text(payload: dict) -> str | None:
     if isinstance(result, dict):
         parts = []
         has_explicit_error = False
+        is_cancelled = False
         if result.get("error"):
             parts.append(str(result["error"]))
             has_explicit_error = True
@@ -280,25 +336,27 @@ def _extract_error_text(payload: dict) -> str | None:
             parts.append(str(result["output"]))
         exit_code = result.get("exitCode") or result.get("exit_code")
         if exit_code:
-            try:
-                exit_code_int = int(exit_code)
-            except (ValueError, TypeError):
-                exit_code_int = None
-        else:
-            exit_code_int = None
-        if exit_code_int is not None and exit_code_int != 0:
-            parts.append(f"exit code {exit_code}")
-        elif exit_code and exit_code_int is None:
-            parts.append(f"exit code {exit_code}")
+            exit_code_int, is_error, is_cancelled = _parse_exit_code(exit_code)
+            if exit_code_int is not None and exit_code_int != 0:
+                parts.append(f"exit code {exit_code_int}")
+                has_explicit_error = True
+            elif is_error:
+                if is_cancelled:
+                    parts.append("command cancelled")
+                else:
+                    parts.append(f"exit code {exit_code}")
+                    has_explicit_error = True
         rci = result.get("returnCodeInterpretation")
         if rci and isinstance(rci, str) and "error" in rci.lower():
             parts.append(rci)
         if result.get("interrupted"):
             parts.append("command interrupted")
             has_explicit_error = True
-        if exit_code_int is not None and exit_code_int != 0:
-            has_explicit_error = True
-        elif exit_code and exit_code_int is None:
+            is_cancelled = True
+        if exit_code:
+            _, is_error, was_cancelled = _parse_exit_code(exit_code)
+            if is_error and not was_cancelled:
+                has_explicit_error = True
             has_explicit_error = True
         result = "\n".join(parts)
         if has_explicit_error and result:

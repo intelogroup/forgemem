@@ -259,6 +259,7 @@ _ERROR_PATTERNS = re.compile(
     r"|segmentation fault"
     r"|panic:"
     r"|fatal:"
+    r"|command interrupted"
     r")",
     re.IGNORECASE,
 )
@@ -278,23 +279,59 @@ _FINGERPRINT_NOISE = re.compile(
 
 
 def _extract_error_text(payload: dict) -> str | None:
-    """Extract error text from a PostToolUse payload, or None if no error."""
-    # Claude Code provides tool_result (string or dict with stdout/stderr)
-    result = payload.get("tool_result") or payload.get("toolResult") or ""
+    """Extract error text from a PostToolUse payload, or None if no error.
+
+    Checks multiple field names for cross-platform compatibility:
+    - tool_response: Claude Code, Copilot CLI, Gemini
+    - tool_output: Codex
+    - tool_result / toolResult: legacy / other integrations
+    """
+    result = (
+        payload.get("tool_response")
+        or payload.get("tool_output")
+        or payload.get("tool_result")
+        or payload.get("toolResult")
+        or ""
+    )
     if isinstance(result, dict):
-        # Bash tool results may have stdout/stderr/exitCode
+        # Bash tool: {stdout, stderr, interrupted, returnCodeInterpretation, ...}
+        # Some platforms may use {stdout, stderr, exitCode}
+        # Gemini may include an {error} field
         parts = []
+        has_explicit_error = False
+        # Gemini tool_response.error field — always treat as error
+        if result.get("error"):
+            parts.append(str(result["error"]))
+            has_explicit_error = True
         if result.get("stderr"):
             parts.append(str(result["stderr"]))
         if result.get("stdout"):
             parts.append(str(result["stdout"]))
         if result.get("content"):
             parts.append(str(result["content"]))
-        # Non-zero exit code is an error signal
+        # Codex tool_output may nest the output in an "output" field
+        if result.get("output"):
+            parts.append(str(result["output"]))
+        # Non-zero exit code (platform-dependent field names)
         exit_code = result.get("exitCode") or result.get("exit_code")
         if exit_code and int(exit_code) != 0:
             parts.append(f"exit code {exit_code}")
+        # Claude Code uses returnCodeInterpretation instead of exitCode
+        rci = result.get("returnCodeInterpretation")
+        if rci and isinstance(rci, str) and "error" in rci.lower():
+            parts.append(rci)
+        # interrupted command is an error signal
+        if result.get("interrupted"):
+            parts.append("command interrupted")
+            has_explicit_error = True
+        # Non-zero exit code is also an explicit error signal
+        if exit_code and int(exit_code) != 0:
+            has_explicit_error = True
         result = "\n".join(parts)
+        # If the dict had an explicit error/interrupted/exitCode field, return
+        # without requiring _ERROR_PATTERNS match (Gemini error field, etc.)
+        if has_explicit_error and result:
+            return result
     elif not isinstance(result, str):
         result = str(result)
 

@@ -1386,6 +1386,149 @@ class TestExtractErrorTextExtended:
         # The regex requires Error followed by space/colon/bracket
         assert _extract_error_text(payload) is None
 
+    # -- Official Claude Code field name: tool_response -----------------------
+
+    def test_tool_response_field_detected(self):
+        """Official Claude Code field name is tool_response, not tool_result."""
+        payload = {"tool_response": "TypeError: cannot read property"}
+        assert _extract_error_text(payload) is not None
+
+    def test_tool_response_takes_precedence(self):
+        """tool_response should be checked before tool_result."""
+        payload = {
+            "tool_response": "ModuleNotFoundError: no module named foo",
+            "tool_result": "all good",
+        }
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "ModuleNotFoundError" in result
+
+    def test_tool_response_bash_object(self):
+        """Official Bash tool_response structure: {stdout, stderr, interrupted}."""
+        payload = {
+            "tool_response": {
+                "stdout": "",
+                "stderr": "TypeError: bad argument",
+                "interrupted": False,
+            }
+        }
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "TypeError" in result
+
+    def test_tool_response_return_code_interpretation_error(self):
+        """Bash returnCodeInterpretation containing 'error' triggers detection."""
+        payload = {
+            "tool_response": {
+                "stdout": "some output",
+                "stderr": "",
+                "returnCodeInterpretation": "Error: command returned non-zero exit code",
+            }
+        }
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "error" in result.lower()
+
+    def test_tool_response_return_code_interpretation_success_no_error(self):
+        """Bash returnCodeInterpretation without 'error' is not an error."""
+        payload = {
+            "tool_response": {
+                "stdout": "all good",
+                "stderr": "",
+                "returnCodeInterpretation": "Command completed successfully",
+            }
+        }
+        assert _extract_error_text(payload) is None
+
+    def test_tool_response_interrupted_command(self):
+        """Interrupted command should be detected as an error."""
+        payload = {
+            "tool_response": {
+                "stdout": "partial output",
+                "stderr": "",
+                "interrupted": True,
+            }
+        }
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "interrupted" in result.lower()
+
+    def test_tool_response_interrupted_false_no_error(self):
+        """Non-interrupted successful command is not an error."""
+        payload = {
+            "tool_response": {
+                "stdout": "success",
+                "stderr": "",
+                "interrupted": False,
+            }
+        }
+        assert _extract_error_text(payload) is None
+
+    def test_tool_response_empty_string(self):
+        payload = {"tool_response": ""}
+        assert _extract_error_text(payload) is None
+
+    def test_tool_response_none_falls_to_tool_result(self):
+        """If tool_response is None/missing, fall back to tool_result."""
+        payload = {"tool_result": "ValueError: invalid literal"}
+        assert _extract_error_text(payload) is not None
+
+    # -- Codex: tool_output field ---------------------------------------------
+
+    def test_codex_tool_output_field(self):
+        """Codex uses tool_output instead of tool_response."""
+        payload = {"tool_output": "TypeError: cannot call undefined"}
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "TypeError" in result
+
+    def test_codex_tool_output_nested_output(self):
+        """Codex tool_output may nest the result in an 'output' sub-field."""
+        payload = {"tool_output": {"output": "ModuleNotFoundError: No module named 'bar'"}}
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "ModuleNotFoundError" in result
+
+    # -- Gemini: tool_response.error field ------------------------------------
+
+    def test_gemini_tool_response_error_field(self):
+        """Gemini tool_response may include an 'error' field."""
+        payload = {"tool_response": {"error": "Permission denied: /etc/shadow"}}
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "Permission denied" in result
+
+    def test_gemini_tool_response_error_empty_no_trigger(self):
+        """Gemini tool_response with empty error field is not an error."""
+        payload = {"tool_response": {"error": "", "llmContent": "success"}}
+        assert _extract_error_text(payload) is None
+
+    # -- Copilot: tool_response same as Claude Code ---------------------------
+
+    def test_copilot_tool_response_string(self):
+        """Copilot CLI uses tool_response as a string."""
+        payload = {"tool_response": "Error: ENOENT: no such file or directory"}
+        result = _extract_error_text(payload)
+        assert result is not None
+
+    # -- Field precedence order -----------------------------------------------
+
+    def test_tool_output_used_when_tool_response_absent(self):
+        """tool_output (Codex) should be used when tool_response is absent."""
+        payload = {"tool_output": "SyntaxError: unexpected EOF"}
+        assert _extract_error_text(payload) is not None
+
+    def test_field_precedence_chain(self):
+        """tool_response > tool_output > tool_result > toolResult."""
+        # When tool_response has content, it takes precedence
+        payload = {
+            "tool_response": "TypeError: from tool_response",
+            "tool_output": "ValueError: from tool_output",
+            "tool_result": "KeyError: from tool_result",
+        }
+        result = _extract_error_text(payload)
+        assert "tool_response" in result
+
 
 # ---------------------------------------------------------------------------
 # _error_fingerprint: extended coverage

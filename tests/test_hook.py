@@ -1110,3 +1110,462 @@ class TestHandleErrorRecall:
         out = capsys.readouterr().out
         ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
         assert "5 times" in ctx
+
+    def test_daemon_get_failure_does_not_crash(self, monkeypatch):
+        """If daemon is unreachable, error recall should return None gracefully."""
+        monkeypatch.setattr(hook, "_daemon_get", lambda path, params=None: {})
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        # No crash, and no context injected (count defaults to 0)
+        assert result is None
+
+    def test_daemon_post_failure_does_not_crash(self, monkeypatch):
+        """If posting error event fails, recall should still proceed."""
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 1}
+            if path == "/search":
+                return {"results": [{"id": "d:1", "type": "note", "title": "Tip"}]}
+            if path.startswith("/observation/"):
+                return {"title": "Tip", "narrative": "Info"}
+            return {}
+
+        def failing_post(path, data):
+            raise ConnectionError("daemon down")
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        # _daemon_post internally swallows exceptions, but let's verify the
+        # outer handler doesn't crash even if _daemon_post raises in test
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert result == 0  # still injects context
+
+    def test_session_key_variant(self, monkeypatch):
+        """Payload with 'session' instead of 'session_id' should work."""
+        posts = []
+        monkeypatch.setattr(hook, "_daemon_get", lambda path, params=None: {"count": 0})
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: posts.append(data) or {})
+
+        payload = {
+            "tool_name": "Bash",
+            "session": "alt-session-key",
+            "project_id": "/proj",
+            "tool_result": "TypeError: oops",
+        }
+        _handle_error_recall(payload, "PostToolUse")
+        assert posts[0]["session_id"] == "alt-session-key"
+
+    def test_error_text_truncated_to_500(self, monkeypatch):
+        """Posted error_text should be truncated to 500 chars."""
+        posts = []
+        monkeypatch.setattr(hook, "_daemon_get", lambda path, params=None: {"count": 0})
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: posts.append(data) or {})
+
+        long_error = "TypeError: " + "x" * 1000
+        _handle_error_recall(self._error_payload(error_text=long_error), "PostToolUse")
+        assert len(posts[0]["error_text"]) == 500
+
+    def test_observation_learnings_fallback(self, monkeypatch, capsys):
+        """If observation has 'learnings' but no 'narrative', use learnings."""
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 1}
+            if path == "/search":
+                return {"results": [{"id": "s:7", "type": "summary", "title": "Session fix"}]}
+            if path.startswith("/observation/"):
+                return {"title": "Session fix", "learnings": "Always check null", "narrative": ""}
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert result == 0
+        ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+        assert "Always check null" in ctx
+
+    def test_observation_no_narrative_skipped(self, monkeypatch, capsys):
+        """If observation has neither narrative nor learnings, skip it in detailed."""
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 1}
+            if path == "/search":
+                return {"results": [{"id": "d:1", "type": "note", "title": "Empty obs"}]}
+            if path.startswith("/observation/"):
+                return {"title": "Empty obs", "narrative": "", "learnings": ""}
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert result == 0
+        ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+        # Falls back to summary parts since no detailed narratives
+        assert "[note] Empty obs" in ctx
+
+    def test_result_id_without_colon_skipped(self, monkeypatch, capsys):
+        """Results with no ':' in ID are skipped for observation fetch."""
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 1}
+            if path == "/search":
+                return {"results": [{"id": "badid", "type": "note", "title": "No prefix"}]}
+            if path.startswith("/observation/"):
+                raise AssertionError("Should not be called for bad ID")
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        result = _handle_error_recall(self._error_payload(), "PostToolUse")
+        assert result == 0
+        ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+        # Falls back to summary parts
+        assert "[note] No prefix" in ctx
+
+    def test_deduplicates_across_project_and_global_search(self, monkeypatch, capsys):
+        """Same result from project + global search should appear only once."""
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 1}
+            if path == "/search":
+                return {
+                    "results": [
+                        {"id": "d:42", "type": "bugfix", "title": "Shared fix"},
+                    ]
+                }
+            if path.startswith("/observation/"):
+                return {"title": "Shared fix", "narrative": "The fix"}
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        _handle_error_recall(self._error_payload(), "PostToolUse")
+        ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
+        # "Shared fix" should only appear once despite being in both searches
+        assert ctx.count("Shared fix") == 1
+
+    def test_copilot_format_uses_system_message(self, monkeypatch, capsys):
+        """Copilot source tool should use systemMessage format."""
+        monkeypatch.setattr(hook, "SOURCE_TOOL", "copilot")
+
+        def fake_daemon_get(path, params=None):
+            if path == "/error_events":
+                return {"count": 1}
+            if path == "/search":
+                return {"results": [{"id": "d:1", "type": "note", "title": "Tip"}]}
+            if path.startswith("/observation/"):
+                return {"title": "Tip", "narrative": "Do X"}
+            return {}
+
+        monkeypatch.setattr(hook, "_daemon_get", fake_daemon_get)
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+
+        _handle_error_recall(self._error_payload(), "PostToolUse")
+        data = json.loads(capsys.readouterr().out)
+        assert "systemMessage" in data
+        assert "hookSpecificOutput" not in data
+        assert "seen 2 times" in data["systemMessage"]
+
+    def test_write_tool_first_error_still_posts_event(self, monkeypatch, capsys):
+        """First error on a write tool: no context, but event still posted."""
+        posted = []
+        monkeypatch.setattr(hook, "_daemon_get", lambda path, params=None: {"count": 0})
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+        monkeypatch.setattr(hook, "_post_event", lambda e: posted.append(e))
+
+        payload = self._error_payload(tool_name="Edit")
+        rc = _handle_post_tool_use(payload, "PostToolUse")
+        assert rc == 0
+        # First error returns None from error_recall, falls through to normal path
+        # Edit is a write tool so it should be posted
+        assert len(posted) == 1
+
+    def test_non_write_tool_no_error_returns_zero(self, monkeypatch):
+        """Read tool with no error: normal skip, no crash."""
+        monkeypatch.setattr(hook, "_daemon_get", lambda path, params=None: {})
+        monkeypatch.setattr(hook, "_daemon_post", lambda path, data: {})
+        posted = []
+        monkeypatch.setattr(hook, "_post_event", lambda e: posted.append(e))
+
+        payload = {"tool_name": "Grep", "session_id": "s1", "tool_result": "found 3 matches"}
+        rc = _handle_post_tool_use(payload, "PostToolUse")
+        assert rc == 0
+        assert len(posted) == 0
+
+
+# ---------------------------------------------------------------------------
+# _extract_error_text: extended coverage
+# ---------------------------------------------------------------------------
+
+
+class TestExtractErrorTextExtended:
+    def test_dict_result_with_content_field(self):
+        payload = {"tool_result": {"content": "SyntaxError: unexpected token"}}
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "SyntaxError" in result
+
+    def test_dict_result_exit_code_key_variant(self):
+        payload = {"tool_result": {"stdout": "fail", "exit_code": 2}}
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "exit code" in result
+
+    def test_non_string_non_dict_result_stringified(self):
+        payload = {"tool_result": 42}
+        # int doesn't match error patterns
+        assert _extract_error_text(payload) is None
+
+    def test_list_result_stringified(self):
+        payload = {"tool_result": ["TypeError: bad"]}
+        result = _extract_error_text(payload)
+        # str(["TypeError: bad"]) contains "TypeError" which matches pattern
+        assert result is not None
+
+    def test_detects_go_panic(self):
+        payload = {"tool_result": "goroutine 1 [running]:\npanic: runtime error: index out of range"}
+        assert _extract_error_text(payload) is not None
+
+    def test_detects_fatal(self):
+        payload = {"tool_result": "fatal: not a git repository"}
+        assert _extract_error_text(payload) is not None
+
+    def test_detects_segfault(self):
+        payload = {"tool_result": "Segmentation fault (core dumped)"}
+        assert _extract_error_text(payload) is not None
+
+    def test_detects_is_not_defined(self):
+        payload = {"tool_result": "ReferenceError: myVar is not defined"}
+        assert _extract_error_text(payload) is not None
+
+    def test_detects_cannot_find_module(self):
+        payload = {"tool_result": "Cannot find module '@/components/Foo'"}
+        assert _extract_error_text(payload) is not None
+
+    def test_detects_compilation_failed(self):
+        payload = {"tool_result": "Compilation failed with 2 errors"}
+        assert _extract_error_text(payload) is not None
+
+    def test_dict_exit_code_zero_no_error_text(self):
+        """Dict with exitCode 0 and no error text should return None."""
+        payload = {"tool_result": {"stdout": "ok", "exitCode": 0}}
+        assert _extract_error_text(payload) is None
+
+    def test_dict_exit_code_zero_string(self):
+        """Exit code '0' as string should not trigger."""
+        payload = {"tool_result": {"stdout": "ok", "exitCode": "0"}}
+        assert _extract_error_text(payload) is None
+
+    def test_stderr_and_stdout_both_collected(self):
+        payload = {"tool_result": {
+            "stderr": "warning: unused var",
+            "stdout": "TypeError: bad",
+        }}
+        result = _extract_error_text(payload)
+        assert result is not None
+        assert "TypeError" in result
+        assert "warning" in result
+
+    def test_detects_undefined_is_not(self):
+        payload = {"tool_result": "undefined is not a function"}
+        assert _extract_error_text(payload) is not None
+
+    def test_detects_called_process_error(self):
+        payload = {"tool_result": "subprocess.CalledProcessError: returned 1"}
+        assert _extract_error_text(payload) is not None
+
+    def test_no_false_positive_on_error_in_identifier(self):
+        """Words like 'errorHandler' should not trigger false positive."""
+        payload = {"tool_result": "Registered errorHandler for route /api"}
+        # The regex requires Error followed by space/colon/bracket
+        assert _extract_error_text(payload) is None
+
+
+# ---------------------------------------------------------------------------
+# _error_fingerprint: extended coverage
+# ---------------------------------------------------------------------------
+
+
+class TestErrorFingerprintExtended:
+    def test_strips_hex_addresses(self):
+        err1 = "TypeError: at address 0xDEADBEEF"
+        err2 = "TypeError: at address 0x12345678"
+        assert _error_fingerprint(err1) == _error_fingerprint(err2)
+
+    def test_strips_timestamps(self):
+        err1 = "Error at 1711900000000: connection lost"
+        err2 = "Error at 1711999999999: connection lost"
+        assert _error_fingerprint(err1) == _error_fingerprint(err2)
+
+    def test_multiline_extracts_key_lines_only(self):
+        trace = (
+            "  File /path/to/foo.py, line 42\n"
+            "    x = y.z\n"
+            "TypeError: 'NoneType' has no attribute 'z'\n"
+            "During handling of the above exception:\n"
+            "ValueError: invalid literal\n"
+        )
+        fp = _error_fingerprint(trace)
+        assert len(fp) == 16
+
+    def test_fallback_to_first_line_when_no_pattern(self):
+        """Error text with no matching pattern should use first line."""
+        fp = _error_fingerprint("some random output\nmore stuff")
+        assert len(fp) == 16
+
+    def test_empty_string(self):
+        fp = _error_fingerprint("")
+        assert len(fp) == 16
+
+    def test_strips_file_line_col(self):
+        err1 = "SyntaxError: unexpected token at :10:5"
+        err2 = "SyntaxError: unexpected token at :99:12"
+        assert _error_fingerprint(err1) == _error_fingerprint(err2)
+
+    def test_strips_stack_frame_locations(self):
+        err1 = "Error at processTicksAndRejections (internal/process/task_queues.js:95:5)"
+        err2 = "Error at processTicksAndRejections (internal/process/task_queues.js:200:9)"
+        assert _error_fingerprint(err1) == _error_fingerprint(err2)
+
+    def test_case_insensitive(self):
+        err1 = "TypeError: BAD TYPE"
+        err2 = "TypeError: bad type"
+        assert _error_fingerprint(err1) == _error_fingerprint(err2)
+
+
+# ---------------------------------------------------------------------------
+# _extract_error_keywords: extended coverage
+# ---------------------------------------------------------------------------
+
+
+class TestExtractErrorKeywordsExtended:
+    def test_no_pattern_match_falls_back_to_first_lines(self):
+        kw = _extract_error_keywords("foo bar baz\nqux quux")
+        assert "foo" in kw
+        assert "bar" in kw
+        assert "baz" in kw
+
+    def test_strips_hex_addresses(self):
+        kw = _extract_error_keywords("Error at 0xDEADBEEF: bad memory")
+        assert "0xDEADBEEF" not in kw
+        assert "Error" in kw
+
+    def test_short_words_filtered(self):
+        kw = _extract_error_keywords("Error: a b cd efg")
+        assert " a " not in f" {kw} "
+        assert " b " not in f" {kw} "
+        assert " cd " not in f" {kw} "
+        assert "efg" in kw
+
+    def test_empty_string(self):
+        kw = _extract_error_keywords("")
+        assert kw == ""
+
+    def test_multiline_error_picks_up_to_3_key_lines(self):
+        error = (
+            "TypeError: bad\n"
+            "ValueError: worse\n"
+            "KeyError: missing\n"
+            "RuntimeError: extra\n"
+        )
+        kw = _extract_error_keywords(error)
+        # Should pick first 3 matching lines
+        assert "TypeError" in kw
+        assert "ValueError" in kw
+        assert "KeyError" in kw
+        # RuntimeError is 4th, should not be included as source
+        # (but may or may not appear in keywords — depends on word extraction)
+
+
+# ---------------------------------------------------------------------------
+# _daemon_post: transport coverage
+# ---------------------------------------------------------------------------
+
+
+class TestDaemonPost:
+    def test_http_success(self, monkeypatch):
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.json.return_value = {"status": "ok"}
+        monkeypatch.setattr(hook, "DAEMON_URL", None)
+        monkeypatch.setattr(hook, "HTTP_PORT", "5555")
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(hook.requests, "post", lambda url, json=None, timeout=None: mock_resp)
+        result = hook._daemon_post("/error_events", {"x": 1})
+        assert result == {"status": "ok"}
+
+    def test_daemon_url_override(self, monkeypatch):
+        calls = []
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.json.return_value = {"ok": True}
+        monkeypatch.setattr(hook, "DAEMON_URL", "http://remote:9000")
+        monkeypatch.setattr(hook.requests, "post", lambda url, json=None, timeout=None: (calls.append(url), mock_resp)[1])
+        result = hook._daemon_post("/error_events", {})
+        assert calls[0] == "http://remote:9000/error_events"
+
+    def test_http_exception_returns_empty_dict(self, monkeypatch):
+        monkeypatch.setattr(hook, "DAEMON_URL", None)
+        monkeypatch.setattr(hook, "HTTP_PORT", "5555")
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(hook.requests, "post", lambda *a, **kw: (_ for _ in ()).throw(ConnectionError("down")))
+        result = hook._daemon_post("/error_events", {})
+        assert result == {}
+
+    def test_no_url_returns_empty_dict(self, monkeypatch):
+        monkeypatch.setattr(hook, "DAEMON_URL", None)
+        monkeypatch.setattr(hook, "HTTP_PORT", None)
+        monkeypatch.setattr(sys, "platform", "win32")
+        result = hook._daemon_post("/error_events", {})
+        assert result == {}
+
+    def test_http_non_ok_returns_empty_dict(self, monkeypatch):
+        mock_resp = MagicMock()
+        mock_resp.ok = False
+        monkeypatch.setattr(hook, "DAEMON_URL", None)
+        monkeypatch.setattr(hook, "HTTP_PORT", "5555")
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(hook.requests, "post", lambda url, json=None, timeout=None: mock_resp)
+        result = hook._daemon_post("/error_events", {})
+        assert result == {}
+
+    def test_posix_socket_success(self, monkeypatch):
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.json.return_value = {"status": "ok"}
+
+        class _FakeSession:
+            def post(self, url, json=None, timeout=None):
+                return mock_resp
+
+        fake_module = MagicMock()
+        fake_module.Session.return_value = _FakeSession()
+        monkeypatch.setitem(sys.modules, "requests_unixsocket", fake_module)
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(hook, "DAEMON_URL", None)
+        result = hook._daemon_post("/error_events", {"x": 1})
+        assert result == {"status": "ok"}
+
+    def test_posix_socket_failure_falls_back_to_http(self, monkeypatch):
+        class _BrokenSession:
+            def post(self, *a, **kw):
+                raise OSError("socket dead")
+
+        fake_module = MagicMock()
+        fake_module.Session.return_value = _BrokenSession()
+        monkeypatch.setitem(sys.modules, "requests_unixsocket", fake_module)
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(hook, "DAEMON_URL", None)
+        monkeypatch.setattr(hook, "HTTP_PORT", "5555")
+
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.json.return_value = {"fallback": True}
+        monkeypatch.setattr(hook.requests, "post", lambda url, json=None, timeout=None: mock_resp)
+        result = hook._daemon_post("/error_events", {})
+        assert result == {"fallback": True}

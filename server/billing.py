@@ -6,7 +6,11 @@ import os
 import stripe
 
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+
+
+def _webhook_secret() -> str:
+    """Read at call time so Render env-var updates take effect without rebuild."""
+    return os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
 # Credit packs: pack_id → {price_id (Stripe), credit_usd, label}
 # Create these price IDs in your Stripe dashboard as one-time payment prices.
@@ -57,7 +61,7 @@ def parse_webhook_event(payload: bytes, sig: str) -> dict | None:
     or None for non-payment events / unpaid sessions.
     Raises stripe.error.SignatureVerificationError on bad signature.
     """
-    event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    event = stripe.Webhook.construct_event(payload, sig, _webhook_secret())
 
     if event["type"] != "checkout.session.completed":
         return None

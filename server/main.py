@@ -233,7 +233,9 @@ async def stripe_webhook(request: Request):
     sig = request.headers.get("stripe-signature", "")
     try:
         result = parse_webhook_event(payload, sig)
-    except Exception:
+    except Exception as exc:
+        import logging
+        logging.warning("stripe webhook signature failure: %s", exc)
         raise HTTPException(status_code=400, detail="Invalid webhook signature")
 
     if result is None:

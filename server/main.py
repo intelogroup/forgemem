@@ -227,6 +227,14 @@ async def checkout(body: CheckoutRequest, authorization: Annotated[str, Header()
     return {"checkout_url": url, "packs": CREDIT_PACKS}
 
 
+@app.get("/debug/webhook-secret-check")
+async def debug_webhook_secret():
+    """Temporary: confirm which secret is loaded. Returns first/last 4 chars only."""
+    import os
+    s = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    return {"prefix": s[:10], "suffix": s[-4:], "length": len(s)}
+
+
 @app.post("/webhooks/stripe")
 async def stripe_webhook(request: Request):
     payload = await request.body()

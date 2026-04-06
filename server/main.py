@@ -238,15 +238,29 @@ async def debug_webhook_secret():
 
 @app.post("/debug/webhook-echo")
 async def debug_webhook_echo(request: Request):
-    """Temporary: echo back payload hash + header to debug signature issues."""
+    """Temporary: echo back payload hash + try verify to debug signature issues."""
     import hashlib
+    import stripe as _stripe
+    from billing import _webhook_secret
     body = await request.body()
     sig = request.headers.get("stripe-signature", "")
+    secret = _webhook_secret()
+    verify_result = "not_attempted"
+    verify_error = None
+    try:
+        _stripe.Webhook.construct_event(body, sig, secret)
+        verify_result = "ok"
+    except Exception as e:
+        verify_result = "fail"
+        verify_error = f"{type(e).__name__}: {e}"
     return {
         "body_len": len(body),
         "body_sha256": hashlib.sha256(body).hexdigest()[:16],
         "sig_header": sig[:80],
-        "content_type": request.headers.get("content-type", ""),
+        "secret_prefix": secret[:10],
+        "secret_len": len(secret),
+        "verify": verify_result,
+        "verify_error": verify_error,
     }
 
 
